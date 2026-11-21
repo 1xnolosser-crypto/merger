@@ -2,6 +2,7 @@
 
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { refreshTaskFromProvider } from '@/lib/task-worker'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -10,6 +11,20 @@ export async function GET(req: Request) {
   const url = new URL(req.url)
   const limit = Math.min(Number(url.searchParams.get('limit') || '50'), 200)
   const status = url.searchParams.get('status')
+
+  // On-demand refresh of active tasks (throttled per task inside the helper)
+  // so progress keeps moving on serverless where background workers die.
+  try {
+    const active = await db.task.findMany({
+      where: { status: { in: ['queued', 'running'] } },
+      orderBy: { updatedAt: 'desc' },
+      take: 5,
+      select: { id: true },
+    })
+    await Promise.all(active.map((t) => refreshTaskFromProvider(t.id).catch(() => {})))
+  } catch {
+    // refresh is best-effort — never block listing
+  }
 
   const where = status ? { status } : {}
   const tasks = await db.task.findMany({

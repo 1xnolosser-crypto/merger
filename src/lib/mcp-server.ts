@@ -1,8 +1,12 @@
 // MCP server with 5 tools, exposed over Streamable HTTP at /mcp.
 //
-// Each MCP client connection (ChatGPT, Claude, Cursor, ...) gets its own
-// session: a dedicated McpServer + WebStandardStreamableHTTPServerTransport
-// pair, keyed by sessionId.
+// Stateless mode: every request gets a fresh McpServer + transport pair with
+// JSON responses. This is intentional for serverless deployment (Vercel):
+//   - no session state to lose between function invocations
+//   - JSON bodies instead of long-lived SSE streams (which serverless
+//     functions cannot keep open between requests)
+// Standard MCP clients (ChatGPT, Claude, Cursor, ...) send initialize →
+// notifications/initialized → tools/list → tools/call and work unchanged.
 //
 // The 5 tools:
 //   1. generate_image     — text → image via gpt-image-2-6/flare-text-to-image
@@ -16,16 +20,14 @@ import {
   WebStandardStreamableHTTPServerTransport,
 } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { z } from 'zod'
-import { randomUUID } from 'crypto'
 import { db } from './db'
-import { createTask } from './task-worker'
+import { createTask, refreshTaskFromProvider } from './task-worker'
 import type { PublicTask } from './types'
 
 const SERVER_NAME = 'mcp-media-gen'
-const SERVER_VERSION = '1.0.0'
+const SERVER_VERSION = '1.1.0'
 
 // ─── Tool definitions ───────────────────────────────────────────────────────
-// Defined once and registered on every new session.
 
 function registerTools(server: McpServer): void {
   server.tool(
@@ -144,6 +146,11 @@ function registerTools(server: McpServer): void {
         .describe('The task_id returned by generate_image/generate_video/merge_videos.'),
     },
     async (args) => {
+      // On-demand refresh: ask the provider for fresh state and persist it,
+      // so the task keeps moving even when the background worker was killed
+      // by a serverless timeout.
+      await refreshTaskFromProvider(args.task_id).catch(() => {})
+
       const task = await db.task.findUnique({ where: { id: args.task_id } })
       if (!task) {
         return toolText(
@@ -209,101 +216,19 @@ function toolText(obj: unknown, isError = false) {
   }
 }
 
-// ─── Per-session server management ──────────────────────────────────────────
-
-interface SessionEntry {
-  server: McpServer
-  transport: WebStandardStreamableHTTPServerTransport
-  initialized: Promise<void>
-  lastSeen: number
-}
-
-const globalForMcp = globalThis as unknown as {
-  __mcpSessions?: Map<string, SessionEntry>
-}
-
-function sessions(): Map<string, SessionEntry> {
-  if (!globalForMcp.__mcpSessions) {
-    globalForMcp.__mcpSessions = new Map()
-  }
-  return globalForMcp.__mcpSessions
-}
-
-// How long to keep an idle session before garbage collecting it.
-const SESSION_TTL_MS = 30 * 60 * 1000
-
-function gcSessions() {
-  const now = Date.now()
-  for (const [id, entry] of sessions()) {
-    if (now - entry.lastSeen > SESSION_TTL_MS) {
-      entry.server.close().catch(() => {})
-      sessions().delete(id)
-    }
-  }
-}
-
-function isInitializeRequest(req: Request): boolean {
-  // Cheap check: look at the body for method: "initialize"
-  // We can't read the body here without consuming it, so we clone.
-  return req.method === 'POST'
-}
-
-async function isInitializeBody(req: Request): Promise<boolean> {
-  if (req.method !== 'POST') return false
-  try {
-    const cloned = req.clone()
-    const body = await cloned.json()
-    if (Array.isArray(body)) {
-      return body.some((m) => m?.method === 'initialize')
-    }
-    return body?.method === 'initialize'
-  } catch {
-    return false
-  }
-}
+// ─── Request handling (stateless) ───────────────────────────────────────────
 
 export async function handleMcpRequest(req: Request): Promise<Response> {
-  gcSessions()
-
-  // For an initialize POST, spin up a new session.
-  if (await isInitializeBody(req)) {
-    const sessionId = randomUUID()
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => sessionId,
-      enableJsonResponse: false,
-    })
-    const server = new McpServer(
-      { name: SERVER_NAME, version: SERVER_VERSION },
-      { capabilities: { tools: {}, logging: {} } },
-    )
-    registerTools(server)
-    const initialized = server.connect(transport)
-    sessions().set(sessionId, {
-      server,
-      transport,
-      initialized,
-      lastSeen: Date.now(),
-    })
-    await initialized
-    return transport.handleRequest(req)
-  }
-
-  // For subsequent requests, route to the right session by header.
-  const sessionId = req.headers.get('mcp-session-id') || ''
-  const entry = sessionId ? sessions().get(sessionId) : undefined
-  if (entry) {
-    entry.lastSeen = Date.now()
-    await entry.initialized
-    return entry.transport.handleRequest(req)
-  }
-
-  // No valid session — let the transport emit a clean 400.
-  return new Response(
-    JSON.stringify({
-      jsonrpc: '2.0',
-      error: { code: -32000, message: 'Bad Request: no valid session. Send an initialize request first.' },
-      id: null,
-    }),
-    { status: 400, headers: { 'Content-Type': 'application/json' } },
+  const server = new McpServer(
+    { name: SERVER_NAME, version: SERVER_VERSION },
+    { capabilities: { tools: {}, logging: {} } },
   )
+  registerTools(server)
+
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // stateless — no Mcp-Session-Id handshake
+    enableJsonResponse: true, // single JSON body instead of an SSE stream
+  })
+  await server.connect(transport)
+  return transport.handleRequest(req)
 }

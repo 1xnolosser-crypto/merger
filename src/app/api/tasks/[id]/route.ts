@@ -2,6 +2,7 @@
 
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { refreshTaskFromProvider } from '@/lib/task-worker'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -11,6 +12,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
+  // On-demand provider refresh — keeps tasks moving on serverless.
+  await refreshTaskFromProvider(id).catch(() => {})
   const t = await db.task.findUnique({ where: { id } })
   if (!t) {
     return NextResponse.json({ error: 'not found' }, { status: 404 })

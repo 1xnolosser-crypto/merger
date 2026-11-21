@@ -1,13 +1,16 @@
 // Merge service: takes an ordered list of video URLs, downloads each to a
 // temporary directory, concatenates with ffmpeg (re-encoding to a common
 // H.264/AAC profile when codecs differ), uploads the result to a public
-// file host (catbox.moe by default), and returns the public URL.
+// file host (tmpfiles.org), and returns the public URL.
 //
 // The temp files are deleted immediately after upload. Only the final URL
 // is stored in the database — never the merged media itself.
 //
-// This is the "merge service" portion of the architecture; it's allowed to
-// handle files transiently, while the main Next.js server only stores URLs.
+// Serverless-friendly: the ffmpeg binary is resolved from the bundled
+// @ffmpeg-installer/ffmpeg package (present on Vercel via
+// outputFileTracingIncludes), an FFMPEG_PATH env override, or the system
+// PATH (local development). Stream properties are parsed from
+// `ffmpeg -i` output — no ffprobe binary required.
 
 import { spawn } from 'child_process'
 import { mkdir, rm, writeFile, stat } from 'fs/promises'
@@ -33,59 +36,117 @@ interface ProbeResult {
   duration: number
 }
 
-async function probeVideo(path: string): Promise<ProbeResult> {
-  const args = [
-    '-v', 'error',
-    '-select_streams', 'v:0',
-    '-show_entries',
-    'stream=codec_name,width,height,pix_fmt,r_frame_rate:format=duration',
-    '-of', 'json',
-    path,
-  ]
-  const out = await runFFprobe(args)
-  const parsed = JSON.parse(out)
-  const stream = parsed.streams?.[0] || {}
-  const audio = await runFFprobe([
-    '-v', 'error',
-    '-select_streams', 'a:0',
-    '-show_entries', 'stream=codec_name',
-    '-of', 'json',
-    path,
-  ]).then((s) => JSON.parse(s).streams?.[0]?.codec_name || 'none').catch(() => 'none')
+// ─── ffmpeg binary resolution ───────────────────────────────────────────────
 
-  const fpsStr = stream.r_frame_rate || '30/1'
-  const [n, d] = fpsStr.split('/').map(Number)
-  const fps = d ? n / d : 30
+let cachedFfmpegPath: string | null | undefined
 
-  return {
-    codec: stream.codec_name || 'unknown',
-    width: Number(stream.width) || 0,
-    height: Number(stream.height) || 0,
-    pixFmt: stream.pix_fmt || 'yuv420p',
-    audioCodec: audio,
-    fps: fps || 30,
-    duration: Number(parsed.format?.duration) || 0,
+async function resolveFfmpegPath(): Promise<string> {
+  if (cachedFfmpegPath !== undefined) return cachedFfmpegPath
+  // 1) explicit env override
+  if (process.env.FFMPEG_PATH) {
+    cachedFfmpegPath = process.env.FFMPEG_PATH
+    return cachedFfmpegPath
   }
+  // 2) bundled static binary (works on Vercel where PATH has no ffmpeg)
+  try {
+    const mod = (await import('@ffmpeg-installer/ffmpeg')) as {
+      path?: string
+      default?: { path?: string }
+    }
+    const p = mod?.path || mod?.default?.path
+    if (p) {
+      cachedFfmpegPath = p
+      return p
+    }
+  } catch {
+    // package not installed — fall through
+  }
+  // 3) system PATH (local dev / self-hosted)
+  cachedFfmpegPath = 'ffmpeg'
+  return cachedFfmpegPath
 }
 
-function runFFprobe(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('ffprobe', args, { stdio: ['ignore', 'pipe', 'pipe'] })
-    let out = ''
-    let err = ''
-    proc.stdout.on('data', (d) => (out += d.toString()))
-    proc.stderr.on('data', (d) => (err += d.toString()))
-    proc.on('error', reject)
-    proc.on('close', (code) => {
-      if (code !== 0) reject(new Error(`ffprobe failed (${code}): ${err}`))
-      else resolve(out)
+// ─── stream probing via `ffmpeg -i` ─────────────────────────────────────────
+
+const VIDEO_CODECS_OK = new Set(['h264', 'hevc', 'vp8', 'vp9', 'av1', 'mpeg4', 'mpeg2video'])
+
+interface ParsedStreams {
+  codec: string
+  width: number
+  height: number
+  pixFmt: string
+  fps: number
+  audioCodec: string
+  duration: number
+}
+
+function parseStreamInfo(stderr: string): ParsedStreams {
+  let codec = 'unknown'
+  let width = 0
+  let height = 0
+  let pixFmt = 'yuv420p'
+  let fps = 30
+  let audioCodec = 'none'
+  let duration = 0
+
+  const durM = stderr.match(/Duration:\s*(\d+):(\d+):([\d.]+)/)
+  if (durM) {
+    duration = Number(durM[1]) * 3600 + Number(durM[2]) * 60 + Number(durM[3])
+  }
+
+  // Video stream lines, e.g.:
+  // Stream #0:0(und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 1920x1080 [SAR 1:1 DAR 16:9], 2000 kb/s, 30 fps, 30 tbr
+  const videoRe = /Video:\s*([a-z0-9_]+)/gi
+  let m: RegExpExecArray | null
+  while ((m = videoRe.exec(stderr)) !== null) {
+    const c = m[1]
+    if (VIDEO_CODECS_OK.has(c)) {
+      codec = c
+      // Grab the same line for pixel format + dimensions + fps.
+      const lineStart = stderr.lastIndexOf('Stream', m.index)
+      const lineEnd = stderr.indexOf('\n', m.index)
+      const line = stderr.slice(lineStart >= 0 ? lineStart : m.index, lineEnd > 0 ? lineEnd : undefined)
+      const dim = line.match(/,\s*([a-z0-9_]+)(?:\([a-z_]+\))?,\s*(\d+)x(\d+)/i)
+      if (dim) {
+        pixFmt = dim[1].toLowerCase()
+        width = Number(dim[2])
+        height = Number(dim[3])
+      }
+      const fpsM = line.match(/([\d.]+)\s*fps/i) || line.match(/([\d.]+)\s*tbr/i)
+      if (fpsM) fps = Math.round(Number(fpsM[1])) || 30
+      break
+    }
+  }
+
+  const audioM = stderr.match(/Audio:\s*([a-z0-9_]+)/i)
+  if (audioM) audioCodec = audioM[1].toLowerCase()
+
+  return { codec, width, height, pixFmt, fps, audioCodec, duration }
+}
+
+async function probeVideo(path: string, ffmpegBin: string): Promise<ProbeResult> {
+  const out = await new Promise<string>((resolve) => {
+    const proc = spawn(ffmpegBin, ['-hide_banner', '-i', path, '-f', 'null', '-'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
+    let err = ''
+    proc.stderr.on('data', (d) => (err += d.toString()))
+    proc.on('error', () => resolve(err))
+    proc.on('close', () => resolve(err))
   })
+  const parsed = parseStreamInfo(out)
+  if (parsed.codec === 'unknown') {
+    throw new Error(`ffmpeg probe failed for ${path}: no video stream detected`)
+  }
+  return parsed
 }
 
-function runFFmpeg(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+function runFFmpeg(
+  bin: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const proc = spawn('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', ...args], {
+    const proc = spawn(bin, ['-y', '-hide_banner', '-loglevel', 'error', ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let out = ''
@@ -172,8 +233,7 @@ async function uploadToHost(
 
 async function scrapeDirectUrl(pageUrl: string): Promise<string> {
   // pageUrl: https://tmpfiles.org/<id>/<filename>
-  // Fetch the page, find the canonical direct link in <link rel="stylesheet" href="https://tmpfiles.org/dl/<hash>/<id>/<filename>">
-  // Actually the page contains: <a href="https://tmpfiles.org/dl/<hash>/<id>/<filename>"...
+  // Fetch the page, find the canonical direct link in the HTML.
   const res = await fetch(pageUrl, {
     headers: { 'User-Agent': 'mcp-media-gen/1.0' },
   })
@@ -205,10 +265,10 @@ export interface MergeResult {
  *
  * Strategy:
  *  1. Download each URL into a temp dir.
- *  2. Probe each with ffprobe.
+ *  2. Probe each via `ffmpeg -i` output parsing.
  *  3. If all videos share codec/resolution/fps, use concat demuxer (no re-encode).
  *  4. Otherwise, normalize each to H.264 yuv420p AAC 30fps, then concat.
- *  5. Upload merged file to catbox.moe.
+ *  5. Upload merged file to tmpfiles.org.
  *  6. Delete temp files.
  */
 export async function mergeVideos(opts: MergeOptions): Promise<MergeResult> {
@@ -219,6 +279,8 @@ export async function mergeVideos(opts: MergeOptions): Promise<MergeResult> {
   if (urls.length === 1) {
     throw new Error('NEED_AT_LEAST_TWO_VIDEOS')
   }
+
+  const ffmpegBin = await resolveFfmpegPath()
 
   const jobDir = join(tmpdir(), `mcp-merge-${randomUUID()}`)
   await mkdir(jobDir, { recursive: true })
@@ -240,7 +302,7 @@ export async function mergeVideos(opts: MergeOptions): Promise<MergeResult> {
 
     // 2. Probe all
     opts.onProgress?.({ stage: 'probing', progress: 25, message: 'تحليل خصائص المقاطع' })
-    const probes = await Promise.all(tempFiles.map((p) => probeVideo(p)))
+    const probes = await Promise.all(tempFiles.map((p) => probeVideo(p, ffmpegBin)))
 
     // 3. Decide strategy
     const first = probes[0]
@@ -254,7 +316,6 @@ export async function mergeVideos(opts: MergeOptions): Promise<MergeResult> {
     )
 
     const listFile = join(jobDir, 'concat-list.txt')
-    let concatInputs: string[]
 
     if (allSame) {
       opts.onProgress?.({
@@ -262,7 +323,6 @@ export async function mergeVideos(opts: MergeOptions): Promise<MergeResult> {
         progress: 35,
         message: 'الدمج السريع (بدون إعادة ترميز)',
       })
-      concatInputs = tempFiles
       // concat demuxer requires single-quote escaping
       await writeFile(
         listFile,
@@ -271,7 +331,7 @@ export async function mergeVideos(opts: MergeOptions): Promise<MergeResult> {
       )
 
       const outFile = join(jobDir, `${outName || 'merged'}.mp4`)
-      const result = await runFFmpeg([
+      const result = await runFFmpeg(ffmpegBin, [
         '-f', 'concat', '-safe', '0',
         '-i', listFile,
         '-c', 'copy',
@@ -294,7 +354,7 @@ export async function mergeVideos(opts: MergeOptions): Promise<MergeResult> {
       const targetW = Math.round((targetH * 16) / 9)
       for (let i = 0; i < tempFiles.length; i++) {
         const out = join(jobDir, `norm-${String(i + 1).padStart(3, '0')}.mp4`)
-        const r = await runFFmpeg([
+        const r = await runFFmpeg(ffmpegBin, [
           '-i', tempFiles[i],
           '-vf', `scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30`,
           '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
@@ -314,7 +374,6 @@ export async function mergeVideos(opts: MergeOptions): Promise<MergeResult> {
         })
       }
 
-      concatInputs = normalized
       await writeFile(
         listFile,
         normalized.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n') + '\n',
@@ -322,7 +381,7 @@ export async function mergeVideos(opts: MergeOptions): Promise<MergeResult> {
       )
 
       const outFile = join(jobDir, `${outName || 'merged'}.mp4`)
-      const result = await runFFmpeg([
+      const result = await runFFmpeg(ffmpegBin, [
         '-f', 'concat', '-safe', '0',
         '-i', listFile,
         '-c', 'copy',
@@ -353,6 +412,8 @@ async function finalize(
   }
   const url = await uploadToHost(outFile, `${outName || 'merged'}.mp4`)
   opts.onProgress?.({ stage: 'done', progress: 100, message: 'اكتمل الدمج' })
+  const uploadResult: UploadResult = { url }
+  void uploadResult
   return {
     url,
     sizeBytes: st.size,

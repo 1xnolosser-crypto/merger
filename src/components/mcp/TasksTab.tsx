@@ -72,13 +72,16 @@ export function TasksTab() {
     return () => clearInterval(poll)
   }, [])
 
-  // Open a single WS subscription to all running tasks (one socket, multiple subscriptions)
+  // Open a single WS subscription to all running tasks (one socket, multiple subscriptions).
+  // Skipped entirely when NEXT_PUBLIC_WS_URL is unset (e.g. on Vercel where the
+  // socket.io mini-service isn't deployed) — the 8s polling below is the source of truth.
   useEffect(() => {
+    const WS_URL = process.env.NEXT_PUBLIC_WS_URL
+    if (!WS_URL) return
     if (socketRef.current) return
-    const sock = io('/', {
+    const sock = io(WS_URL, {
       path: '/',
       transports: ['websocket', 'polling'],
-      query: { XTransformPort: '3003' },
       reconnection: true,
       reconnectionAttempts: 5,
     })

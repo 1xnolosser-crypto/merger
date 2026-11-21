@@ -56,6 +56,14 @@ model Task {
   usedKeyLabel String?
   /// How many keys were tried before success (or before all failed).
   attempts    Int       @default(0)
+  /// kie.ai task id once submitted (null for merge tasks / before submit).
+  /// Lets read surfaces (get_task, /api/tasks) refresh state on demand —
+  /// required on serverless where background workers can be killed early.
+  providerTaskId   String?
+  /// Label of the ApiKey that submitted the task (may poll kie.ai for status).
+  providerKeyLabel String?
+  /// Last time the provider was queried for this task (refresh throttle).
+  providerCheckedAt DateTime?
   /// Total ms the task took (queued -> succeeded/failed).
   durationMs  Int?
   createdAt   DateTime  @default(now())

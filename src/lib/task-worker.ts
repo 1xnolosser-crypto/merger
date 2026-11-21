@@ -27,9 +27,18 @@ import {
 } from './types'
 import { randomUUID } from 'crypto'
 import { emitProgress } from './ws-bus'
+import { after } from 'next/server'
 
 const POLL_INTERVAL_MS = 4000
 const MAX_POLL_DURATION_MS = 7 * 60 * 1000 // 7 minutes per attempt
+
+// On-demand refresh throttles & staleness thresholds (serverless mode):
+//   - never hit the provider more than once per REFRESH_MIN_INTERVAL_MS
+//   - tasks that never reached the provider (or merge jobs) die after these
+const REFRESH_MIN_INTERVAL_MS = 5000
+const UNSUBMITTED_STALE_MS = 3 * 60 * 1000
+const MERGE_STALE_MS = 8 * 60 * 1000
+const PROVIDER_MAX_AGE_MS = 10 * 60 * 1000
 
 function newTaskId(): string {
   return `task_${randomUUID().replace(/-/g, '').slice(0, 24)}`
@@ -83,11 +92,27 @@ export async function createTask(input: CreateTaskInput): Promise<string> {
     },
   })
   await log(id, 'info', `Task created: type=${input.type}`, false)
-  // Fire-and-forget the worker
-  runTask(id, input.type, input.params).catch((e) => {
-    console.error(`[worker] uncaught for ${id}:`, e)
-  })
+  scheduleTaskRun(id, input.type, input.params)
   return id
+}
+
+/**
+ * Start the task worker AFTER the HTTP response has been sent.
+ *
+ * On long-lived servers this is equivalent to fire-and-forget. On serverless
+ * platforms (Vercel) fire-and-forget work is killed as soon as the response
+ * returns — `after()` keeps the invocation alive so the worker can run up to
+ * the function's maxDuration. If `after()` is unavailable (called outside a
+ * request scope, e.g. from a script), we fall back to plain fire-and-forget.
+ */
+export function scheduleTaskRun(taskId: string, type: TaskType, params: TaskParams): void {
+  try {
+    after(() => runTask(taskId, type, params))
+  } catch {
+    runTask(taskId, type, params).catch((e) => {
+      console.error(`[worker] uncaught for ${taskId}:`, e)
+    })
+  }
 }
 
 async function runTask(
@@ -134,24 +159,7 @@ async function runTask(
     const err = e as Error & { trace?: RotationTraceEntry[] }
 
     // Sanitize: never expose key values, key ids, or kie.ai internal codes.
-    let publicMsg = 'فشلت كل المحاولات. راجع لوحة المفاتيح في الواجهة.'
-    if (err.message === 'NO_ACTIVE_KEYS') {
-      publicMsg = 'لا توجد مفاتيح API نشطة. أضف مفتاحًا من لوحة الإدارة.'
-    } else if (err.message === 'NO_INPUT_URLS' || err.message === 'NEED_AT_LEAST_TWO_VIDEOS') {
-      publicMsg = 'يجب تمرير رابطي فيديو على الأقل للدمج.'
-    } else if (err.message === 'ALL_KEYS_FAILED') {
-      publicMsg = 'تعذّر إتمام الطلب بعد تجربة كل المفاتيح المتاحة.'
-    } else if (err.message.startsWith('ffmpeg') || err.message.startsWith('ffprobe')) {
-      publicMsg = 'حدث خطأ أثناء معالجة الفيديو. تحقّق من الروابط وحاول مجددًا.'
-    } else if (err.message.startsWith('download failed')) {
-      publicMsg = 'تعذّر تنزيل أحد المقاطع. تحقّق من الروابط.'
-    } else if (err.message.startsWith('catbox') || err.message.startsWith('upload') || err.message.startsWith('page fetch')) {
-      publicMsg = 'تعذّر رفع النتيجة إلى خدمة الاستضافة. حاول لاحقًا.'
-    } else if (err.message === 'POLL_TIMEOUT') {
-      publicMsg = 'انتهت المهلة أثناء انتظار نتيجة المزود. حاول مجددًا.'
-    } else if (err.message.startsWith('PROVIDER_FAILED')) {
-      publicMsg = 'رفض المزود إتمام الطلب. عدّل الوصف وحاول مجددًا.'
-    }
+    const publicMsg = publicTaskError(err.message)
 
     await db.task.update({
       where: { id: taskId },
@@ -192,9 +200,18 @@ async function runImageOrVideo(
     return { providerTaskId, keyLabel: key.label }
   })
 
+  // Persist the provider coordinates so an on-demand refresher (MCP get_task,
+  // /api/tasks polling) can keep the task moving even if this worker dies
+  // (serverless timeout, redeploy, cold start) before completion.
   await db.task.update({
     where: { id: taskId },
-    data: { usedKeyLabel: submitResult.usedKey.label, attempts: submitResult.attempts },
+    data: {
+      usedKeyLabel: submitResult.usedKey.label,
+      attempts: submitResult.attempts,
+      providerTaskId: submitResult.data.providerTaskId,
+      providerKeyLabel: submitResult.usedKey.label,
+      providerCheckedAt: new Date(),
+    },
   })
   await setProgress(taskId, 30)
   await log(
@@ -228,6 +245,11 @@ async function runImageOrVideo(
       // Non-retriable polling error — give up
       throw e
     }
+
+    // Remember when we last talked to the provider (refresh throttle).
+    await db.task
+      .update({ where: { id: taskId }, data: { providerCheckedAt: new Date() } })
+      .catch(() => {})
 
     if (info.status === 'completed' && info.resultUrl) {
       // Push a final progress update if provider didn't reach 100
@@ -294,4 +316,176 @@ export async function recoverStaleTasks() {
     })
     await log(t.id, 'warn', 'Recovered as failed (stale > 30m)', true)
   }
+}
+
+/**
+ * Map an internal error to a sanitized, user-facing Arabic message.
+ * Shared by the worker and the on-demand refresher so both surfaces stay
+ * consistent. Never includes key values, key ids, or provider internals.
+ */
+export function publicTaskError(errMsg: string): string {
+  if (errMsg === 'NO_ACTIVE_KEYS') {
+    return 'لا توجد مفاتيح API نشطة. أضف مفتاحًا من لوحة الإدارة.'
+  }
+  if (errMsg === 'NO_INPUT_URLS' || errMsg === 'NEED_AT_LEAST_TWO_VIDEOS') {
+    return 'يجب تمرير رابطي فيديو على الأقل للدمج.'
+  }
+  if (errMsg === 'ALL_KEYS_FAILED') {
+    return 'تعذّر إتمام الطلب بعد تجربة كل المفاتيح المتاحة.'
+  }
+  if (errMsg.startsWith('ffmpeg') || errMsg.startsWith('ffprobe')) {
+    return 'حدث خطأ أثناء معالجة الفيديو. تحقّق من الروابط وحاول مجددًا.'
+  }
+  if (errMsg.startsWith('download failed')) {
+    return 'تعذّر تنزيل أحد المقاطع. تحقّق من الروابط.'
+  }
+  if (errMsg.startsWith('upload') || errMsg.startsWith('page fetch')) {
+    return 'تعذّر رفع النتيجة إلى خدمة الاستضافة. حاول لاحقًا.'
+  }
+  if (errMsg === 'POLL_TIMEOUT') {
+    return 'انتهت المهلة أثناء انتظار نتيجة المزود. حاول مجددًا.'
+  }
+  if (errMsg.startsWith('PROVIDER_FAILED')) {
+    return 'رفض المزود إتمام الطلب. عدّل الوصف وحاول مجددًا.'
+  }
+  return 'فشلت كل المحاولات. راجع لوحة المفاتيح في الواجهة.'
+}
+
+// ─── On-demand refresh (serverless safety net) ─────────────────────────────
+
+/**
+ * Ask kie.ai for fresh state of a task and persist it.
+ *
+ * Called from every read surface (MCP get_task, GET /api/tasks/:id,
+ * GET /api/tasks) so tasks keep progressing even when the background worker
+ * was killed by a serverless timeout. Throttled to one provider call per
+ * REFRESH_MIN_INTERVAL_MS. Returns the (possibly updated) task row or null.
+ */
+export async function refreshTaskFromProvider(taskId: string): Promise<unknown> {
+  const task = await db.task.findUnique({ where: { id: taskId } }).catch(() => null)
+  if (!task) return null
+  if (task.status === 'succeeded' || task.status === 'failed') return task
+
+  const updatedAtAge = Date.now() - new Date(task.updatedAt).getTime()
+
+  // Merge tasks run fully in-process (download → ffmpeg → upload) — nothing to
+  // ask a provider. If the worker died mid-merge, the task is unrecoverable.
+  if (task.type === 'merge') {
+    if (updatedAtAge > MERGE_STALE_MS) {
+      return await markTaskFailed(
+        task.id,
+        'انتهت مهلة معالجة الدمج. قد تكون المقاطع كبيرة جدًا — جرّب مقاطع أقصر أو أقل.',
+      )
+    }
+    return task
+  }
+
+  // Image/video without a provider task id: the worker never reached kie.ai.
+  if (!task.providerTaskId) {
+    if (updatedAtAge > UNSUBMITTED_STALE_MS) {
+      return await markTaskFailed(
+        task.id,
+        'تعذّر بدء المعالجة عند المزود. تحقق من المفاتيح النشطة وحاول مجددًا.',
+      )
+    }
+    return task
+  }
+
+  // Image/video with a provider task id — throttled provider refresh.
+  const checkedAge = task.providerCheckedAt
+    ? Date.now() - new Date(task.providerCheckedAt).getTime()
+    : Infinity
+  if (checkedAge < REFRESH_MIN_INTERVAL_MS) return task
+  if (Date.now() - new Date(task.createdAt).getTime() > PROVIDER_MAX_AGE_MS) {
+    return await markTaskFailed(task.id, publicTaskError('POLL_TIMEOUT'))
+  }
+
+  // The key that submitted the task is the one that may poll it.
+  const key = task.providerKeyLabel
+    ? await db.apiKey.findFirst({ where: { label: task.providerKeyLabel } })
+    : null
+  if (!key) {
+    await log(task.id, 'warn', `refresh: key "${task.providerKeyLabel}" not found`, true)
+    return task
+  }
+
+  let info
+  try {
+    info = await getTaskInfo(key.keyValue, task.providerTaskId)
+  } catch (e) {
+    await log(
+      task.id,
+      'warn',
+      `refresh: provider error ${(e as Error).message.slice(0, 160)}`,
+      true,
+    )
+    await db.task
+      .update({ where: { id: task.id }, data: { providerCheckedAt: new Date() } })
+      .catch(() => {})
+    return task
+  }
+
+  await db.task
+    .update({ where: { id: task.id }, data: { providerCheckedAt: new Date() } })
+    .catch(() => {})
+
+  if (info.status === 'failed') {
+    return await markTaskFailed(
+      task.id,
+      publicTaskError(`PROVIDER_FAILED: ${info.error || 'unknown'}`),
+    )
+  }
+
+  if (info.status === 'completed' && info.resultUrl) {
+    const result: TaskResult = {
+      url: info.resultUrl,
+      providerTaskId: task.providerTaskId,
+    }
+    const completedAt = new Date()
+    const startedAt = task.startedAt
+      ? new Date(task.startedAt).getTime()
+      : new Date(task.createdAt).getTime()
+    const updated = await db.task
+      .update({
+        where: { id: task.id },
+        data: {
+          status: 'succeeded',
+          progress: 100,
+          result: JSON.stringify(result),
+          completedAt,
+          updatedAt: completedAt,
+          durationMs: Math.max(0, completedAt.getTime() - startedAt),
+        },
+      })
+      .catch(() => task)
+    emitProgress(task.id, 100, 'succeeded')
+    await log(task.id, 'info', `refresh: completed via on-demand poll; url=${info.resultUrl}`).catch(
+      () => {},
+    )
+    return updated
+  }
+
+  // Still pending/processing — mirror the worker's 30..95 scaling.
+  const scaled = 30 + Math.round(((info.progress || 0) / 100) * 65)
+  if (scaled !== task.progress) {
+    await setProgress(task.id, scaled)
+  }
+  return await db.task.findUnique({ where: { id: task.id } }).catch(() => task)
+}
+
+async function markTaskFailed(taskId: string, publicMsg: string) {
+  const updated = await db.task
+    .update({
+      where: { id: taskId },
+      data: {
+        status: 'failed',
+        error: publicMsg,
+        completedAt: new Date(),
+        updatedAt: new Date(),
+      },
+    })
+    .catch(() => null)
+  emitProgress(taskId, 0, 'failed')
+  await log(taskId, 'warn', `refresh: marked failed — ${publicMsg}`, true).catch(() => {})
+  return updated
 }
