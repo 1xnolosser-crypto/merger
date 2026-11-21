@@ -1,0 +1,87 @@
+// Prisma schema for MCP media-generation server
+// Database: Turso (libsql) — adapter configured in src/lib/db.ts
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// API keys for kie.ai. Tried in strict sortOrder ascending.
+/// The MCP layer never exposes keyValue to clients (AI model or human).
+model ApiKey {
+  id           String   @id @default(cuid())
+  /// The actual bearer token sent to kie.ai. Stored in plaintext (single-tenant server).
+  keyValue     String   @unique
+  /// Human label shown in the web UI (e.g. "Main", "Backup-1").
+  label        String   @default("Unnamed")
+  /// Strict ordering — lowest tried first.
+  sortOrder    Int      @default(0)
+  /// active | exhausted | invalid | paused
+  status       String   @default("active")
+  /// Last error message seen from kie.ai for this key (truncated).
+  lastError    String?
+  lastErrorAt  DateTime?
+  lastUsedAt   DateTime?
+  /// How many tasks this key has been used for successfully.
+  successCount Int      @default(0)
+  failCount    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([sortOrder])
+  @@index([status])
+}
+
+/// A single media generation / merge job.
+/// task_id is the only identifier exposed to the MCP client.
+model Task {
+  id          String    @id
+  /// image | video | merge
+  type        String
+  status      String    @default("queued")
+  /// JSON-serialized input params (prompt, urls, etc.)
+  params      String
+  /// JSON-serialized result payload (urls, metadata).
+  result      String?
+  /// Public-facing error message (sanitized). AI never sees key errors.
+  error       String?
+  /// 0..100 — surfaced through get_task.
+  progress    Int       @default(0)
+  /// Which key handled this task successfully (label only, not value).
+  usedKeyLabel String?
+  /// How many keys were tried before success (or before all failed).
+  attempts    Int       @default(0)
+  /// Total ms the task took (queued -> succeeded/failed).
+  durationMs  Int?
+  createdAt   DateTime  @default(now())
+  startedAt   DateTime?
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  logs        TaskLog[]
+
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model TaskLog {
+  id        String   @id @default(cuid())
+  taskId    String
+  /// info | warn | error | debug
+  level     String   @default("info")
+  message   String
+  /// Internal-only context — never exposed to the MCP client.
+  internal  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([createdAt])
+}
