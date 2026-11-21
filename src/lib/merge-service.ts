@@ -7,17 +7,24 @@
 // is stored in the database — never the merged media itself.
 //
 // Serverless-friendly: the ffmpeg binary is resolved from the bundled
-// @ffmpeg-installer/ffmpeg package (present on Vercel via
-// outputFileTracingIncludes), an FFMPEG_PATH env override, or the system
-// PATH (local development). Stream properties are parsed from
-// `ffmpeg -i` output — no ffprobe binary required.
+// @ffmpeg-installer platform package (shipped on Vercel via
+// outputFileTracingIncludes — see next.config.ts), an FFMPEG_PATH env
+// override, or the system PATH (local development). Stream properties are
+// parsed from `ffmpeg -i` output — no ffprobe binary required.
+//
+// IMPORTANT: the installer package is loaded via a runtime createRequire()
+// so no bundler (Turbopack/webpack) ever parses @ffmpeg-installer/ffmpeg —
+// its index.js resolves the binary with __dirname-based dynamic requires,
+// which breaks production builds ("server relative imports are not
+// implemented yet").
 
 import { spawn } from 'child_process'
 import { mkdir, rm, writeFile, stat } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
-import { createWriteStream } from 'fs'
+import { createRequire } from 'module'
+import { accessSync, constants as fsConstants, copyFileSync, chmodSync, createWriteStream } from 'fs'
 import { Readable } from 'stream'
 
 const TMPFILES_ENDPOINT = 'https://tmpfiles.org/api/v1/upload'
@@ -40,30 +47,84 @@ interface ProbeResult {
 
 let cachedFfmpegPath: string | null | undefined
 
-async function resolveFfmpegPath(): Promise<string> {
-  if (cachedFfmpegPath !== undefined) return cachedFfmpegPath
-  // 1) explicit env override
-  if (process.env.FFMPEG_PATH) {
-    cachedFfmpegPath = process.env.FFMPEG_PATH
-    return cachedFfmpegPath
-  }
-  // 2) bundled static binary (works on Vercel where PATH has no ffmpeg)
+/**
+ * Some serverless images strip the exec bit from traced node_modules files.
+ * Copy the binary to a writable dir (/tmp) and chmod it when needed.
+ */
+function ensureExecutable(p: string): string {
   try {
-    const mod = (await import('@ffmpeg-installer/ffmpeg')) as {
-      path?: string
-      default?: { path?: string }
-    }
-    const p = mod?.path || mod?.default?.path
-    if (p) {
-      cachedFfmpegPath = p
+    accessSync(p, fsConstants.X_OK)
+    return p
+  } catch {
+    try {
+      const dest = join(tmpdir(), `mcp-ffmpeg-${process.platform}-${process.arch}`)
+      copyFileSync(p, dest)
+      chmodSync(dest, 0o755)
+      return dest
+    } catch {
       return p
     }
-  } catch {
-    // package not installed — fall through
   }
+}
+
+/** Cheap sanity check: the binary must actually run. */
+function spawnOk(bin: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const proc = spawn(bin, ['-version'], { stdio: 'ignore' })
+    proc.on('error', () => resolve(false))
+    proc.on('close', (code) => resolve(code === 0))
+  })
+}
+
+async function resolveFfmpegPath(): Promise<string> {
+  if (cachedFfmpegPath !== undefined) return cachedFfmpegPath
+
+  const candidates: string[] = []
+
+  // 1) explicit env override (self-hosted / custom images)
+  if (process.env.FFMPEG_PATH) candidates.push(process.env.FFMPEG_PATH)
+
+  // 2) bundled static binary — loaded through a runtime require that no
+  //    bundler can statically analyze (see file header). On Vercel the
+  //    package + platform binary arrive via outputFileTracingIncludes.
+  try {
+    const req = createRequire(join(process.cwd(), 'package.json'))
+    const mod = req('@ffmpeg-installer/ffmpeg') as { path?: string }
+    if (mod?.path) {
+      candidates.push(mod.path)
+    } else {
+      throw new Error('no path exported')
+    }
+  } catch {
+    // installer package missing — look for the platform binary directly
+    try {
+      const direct = join(
+        process.cwd(),
+        'node_modules',
+        '@ffmpeg-installer',
+        `${process.platform}-${process.arch}`,
+        'ffmpeg',
+      )
+      accessSync(direct)
+      candidates.push(direct)
+    } catch {
+      // neither present — system PATH fallback below
+    }
+  }
+
   // 3) system PATH (local dev / self-hosted)
+  candidates.push('ffmpeg')
+
+  for (const candidate of candidates) {
+    const bin = candidate === 'ffmpeg' ? candidate : ensureExecutable(candidate)
+    if (await spawnOk(bin)) {
+      cachedFfmpegPath = bin
+      return bin
+    }
+  }
+
   cachedFfmpegPath = 'ffmpeg'
-  return cachedFfmpegPath
+  return 'ffmpeg'
 }
 
 // ─── stream probing via `ffmpeg -i` ─────────────────────────────────────────
