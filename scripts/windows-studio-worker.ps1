@@ -45,7 +45,8 @@ function Render-StudioJob($Job) {
     $textFile = Join-Path $jobDir (('scene-{0:D3}.txt' -f ($i + 1)))
     [IO.File]::WriteAllText($textFile, [string]$scene.text, [Text.UTF8Encoding]::new($false))
     $textPath = Escape-FilterPath $textFile
-    $draw = "drawtext=font='Arial':textfile='$textPath':fontcolor=white:fontsize=48:line_spacing=14:box=1:boxcolor=black@0.48:boxborderw=26:x=(w-text_w)/2:y=h*0.72"
+    $fontPath = Escape-FilterPath (Join-Path $env:WINDIR 'Fonts\arial.ttf')
+    $draw = "drawtext=fontfile='$fontPath':textfile='$textPath':fontcolor=white:fontsize=48:line_spacing=14:box=1:boxcolor=black@0.48:boxborderw=26:x=(w-text_w)/2:y=h*0.72"
     $imagePath = [string]$scene.imagePath
     if ($imagePath -and (Test-Path -LiteralPath $imagePath -PathType Leaf)) {
       $vf = "scale=\${width}:\${height}:force_original_aspect_ratio=increase,crop=\${width}:\${height},setsar=1,\${draw}"
