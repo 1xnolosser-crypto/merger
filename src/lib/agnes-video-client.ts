@@ -63,6 +63,8 @@ async function requestJson(url: string, apiKey: string, init?: RequestInit): Pro
   }
   if (!response.ok) {
     const status = response.status
+    // Safe diagnostic: numeric status only. Never log body, prompt, or credentials.
+    console.error(`[agnes] provider HTTP status=${status}`)
     await response.text().catch(() => '')
     throw new Error(safeProviderError(status))
   }
