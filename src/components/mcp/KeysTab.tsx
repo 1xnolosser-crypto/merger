@@ -113,12 +113,12 @@ export function KeysTab({ keys, onChange }: Props) {
     <div className="space-y-4">
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">إضافة مفتاح جديد</CardTitle>
+          <CardTitle className="text-base">إدارة مفاتيح KIE القديمة</CardTitle>
         </CardHeader>
         <CardContent>
           {!adding ? (
             <Button onClick={() => setAdding(true)} variant="default">
-              <Plus size={16} /> إضافة مفتاح
+              <Plus size={16} /> إضافة مفتاح (معطّلة)
             </Button>
           ) : (
             <div className="space-y-3">
@@ -138,7 +138,7 @@ export function KeysTab({ keys, onChange }: Props) {
                     id="k-value"
                     value={keyValue}
                     onChange={(e) => setKeyValue(e.target.value)}
-                    placeholder="Bearer token من kie.ai"
+                    placeholder="KIE معطّل — لا تضف مفاتيح"
                     dir="ltr"
                   />
                 </div>
@@ -170,7 +170,7 @@ export function KeysTab({ keys, onChange }: Props) {
         <CardContent className="p-0">
           {keys.length === 0 ? (
             <div className="p-6 text-center text-muted-foreground">
-              لا توجد مفاتيح بعد. أضف مفتاح kie.ai الأول لبدء التوليد.
+              لا توجد مفاتيح بعد. مفاتيح KIE غير مستخدمة حاليًا. التوليد المدفوع محظور لحماية رصيدك.
             </div>
           ) : (
             <div className="divide-y divide-border">
