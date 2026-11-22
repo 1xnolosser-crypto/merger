@@ -436,6 +436,38 @@ export async function refreshTaskFromProvider(taskId: string): Promise<unknown> 
     return await markTaskFailed(task.id, publicTaskError('POLL_TIMEOUT'))
   }
 
+  // Agnes tasks are marked with a provider prefix; poll with the configured
+  // Agnes key and video_id/model_name. Never route these to Kie or paid providers.
+  if (task.providerTaskId.startsWith('agnes:')) {
+    if (checkedAge < 15_000) return task
+    const agnesKey = process.env.AGNES_API_KEY
+    if (!agnesKey) return await markTaskFailed(task.id, 'لم يتم ضبط مفتاح Agnes (AGNES_API_KEY).')
+    const videoId = task.providerTaskId.slice('agnes:'.length)
+    let agnesInfo
+    try {
+      agnesInfo = await getAgnesVideoInfo(agnesKey, videoId)
+    } catch (e) {
+      await log(task.id, 'warn', `refresh Agnes error: ${(e as Error).message.slice(0, 120)}`, true)
+      await db.task.update({ where: { id: task.id }, data: { providerCheckedAt: new Date() } }).catch(() => {})
+      return task
+    }
+    await db.task.update({ where: { id: task.id }, data: { providerCheckedAt: new Date() } }).catch(() => {})
+    if (agnesInfo.status === 'failed') return await markTaskFailed(task.id, 'فشل توليد الفيديو عبر Agnes. لم يتم استخدام مزود مدفوع.')
+    if (agnesInfo.status === 'completed' && agnesInfo.resultUrl) {
+      const result: TaskResult = { url: agnesInfo.resultUrl, providerTaskId: task.providerTaskId }
+      const completedAt = new Date()
+      await db.task.update({
+        where: { id: task.id },
+        data: { status: 'succeeded', progress: 100, result: JSON.stringify(result), completedAt, updatedAt: completedAt },
+      })
+      emitProgress(task.id, 100, 'succeeded')
+      await log(task.id, 'info', 'Agnes video task completed', false)
+      return await db.task.findUnique({ where: { id: task.id } })
+    }
+    if (agnesInfo.progress !== undefined) await setProgress(task.id, 30 + Math.round(Math.max(0, Math.min(100, agnesInfo.progress)) * 0.65))
+    return await db.task.findUnique({ where: { id: task.id } })
+  }
+
   // The key that submitted the task is the one that may poll it.
   const key = task.providerKeyLabel
     ? await db.apiKey.findFirst({ where: { label: task.providerKeyLabel } })
