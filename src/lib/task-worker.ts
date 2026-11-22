@@ -364,7 +364,7 @@ export async function recoverStaleTasks() {
 export function publicTaskError(errMsg: string): string {
   if (errMsg === 'NO_AGNES_API_KEY') return 'لم يتم ضبط مفتاح Agnes API في إعدادات البيئة (AGNES_API_KEY).'
   // Expose only the numeric HTTP status; never expose provider response bodies or credentials.
-  const http = errMsg.match(/^AGNES_HTTP_(\\d{3})$/)
+  const http = errMsg.match(/^AGNES_HTTP_([0-9]{3})$/)
   if (http) {
     const status = Number(http[1])
     if (status === 401 || status === 403) return `رفضت Agnes المصادقة (HTTP ${status}). تحقق من صلاحية مفتاح API.`
