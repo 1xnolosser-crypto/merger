@@ -1,6 +1,9 @@
 # Skills (in-repo skill sources, not part of the app)
 skills/
 
+# User-uploaded conversation artifacts
+upload/
+
 # Dependencies
 node_modules/
 

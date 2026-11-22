@@ -1,5 +1,7 @@
 #!/bin/bash
+# Dev launcher — reads DATABASE_URL / DATABASE_AUTH_TOKEN from .env (gitignored).
 cd /home/z/my-project
-export DATABASE_URL="libsql://test-shin-mod.aws-eu-west-1.turso.io"
-export DATABASE_AUTH_TOKEN="REDACTED"
+set -a
+source .env
+set +a
 exec bun run dev

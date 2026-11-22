@@ -1,9 +1,13 @@
 // Verify the Turso database from the session summary is reachable and has schema.
 import { createClient } from '@libsql/client'
 
-const url = 'libsql://test-shin-mod.aws-eu-west-1.turso.io'
-const authToken =
-  'REDACTED'
+const url = process.env.DATABASE_URL
+const authToken = process.env.DATABASE_AUTH_TOKEN || process.env.TURSO_AUTH_TOKEN
+
+if (!url || !authToken) {
+  console.error('DATABASE_URL and DATABASE_AUTH_TOKEN must be set (e.g. in .env).')
+  process.exit(1)
+}
 
 const client = createClient({ url, authToken })
 
