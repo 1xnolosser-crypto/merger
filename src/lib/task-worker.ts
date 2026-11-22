@@ -324,6 +324,9 @@ export async function recoverStaleTasks() {
  * consistent. Never includes key values, key ids, or provider internals.
  */
 export function publicTaskError(errMsg: string): string {
+  if (errMsg.startsWith('PAID_PROVIDER_DISABLED')) {
+    return 'تم إيقاف التوليد السحابي المدفوع لحماية رصيدك. لم يتم إرسال طلب توليد أو استهلاك أي رصيد. يلزم ربط مولّد مجاني فعلي قبل تفعيل هذه الوظيفة.'
+  }
   if (errMsg === 'NO_ACTIVE_KEYS') {
     return 'لا توجد مفاتيح API نشطة. أضف مفتاحًا من لوحة الإدارة.'
   }
