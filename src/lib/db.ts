@@ -10,16 +10,29 @@ function createPrismaClient(): PrismaClient {
   if (!url) {
     throw new Error('DATABASE_URL is not set')
   }
-  const authToken =
-    process.env.DATABASE_AUTH_TOKEN || process.env.TURSO_AUTH_TOKEN
-
-  // PrismaLibSQL accepts the same Config object as @libsql/client's createClient.
+  const authToken = process.env.DATABASE_AUTH_TOKEN || process.env.TURSO_AUTH_TOKEN
   const adapter = new PrismaLibSQL({ url, authToken })
   return new PrismaClient({ adapter })
 }
 
-export const db =
-  globalForPrisma.prisma ??
-  createPrismaClient()
+// Defer client construction until the first real database operation. Vercel
+// builds preview branches without production-only secrets; eagerly creating
+// Prisma at module import time makes otherwise valid builds fail. Runtime DB
+// access still fails closed with a clear error if that environment has no DB.
+let client: PrismaClient | undefined = globalForPrisma.prisma
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
+function getClient(): PrismaClient {
+  if (!client) {
+    client = createPrismaClient()
+    if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = client
+  }
+  return client
+}
+
+export const db = new Proxy({} as PrismaClient, {
+  get(_target, property) {
+    const instance = getClient()
+    const value = Reflect.get(instance, property, instance)
+    return typeof value === 'function' ? value.bind(instance) : value
+  },
+})
