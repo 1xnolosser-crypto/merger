@@ -15,6 +15,7 @@ import { db } from './db'
 import { withKeyRotation, type RotationTraceEntry } from './key-rotator'
 import { createTask as kieCreateTask, getTaskInfo, KieApiError } from './kie-client'
 import { mergeVideos } from './merge-service'
+import { createAgnesVideo, getAgnesVideoInfo, AGNES_VIDEO_MODEL } from './agnes-video-client'
 import {
   IMAGE_MODEL,
   VIDEO_MODEL,
@@ -133,7 +134,7 @@ async function runTask(
     if (type === 'image') {
       result = await runImageOrVideo(taskId, 'image', params as GenerateImageParams)
     } else if (type === 'video') {
-      result = await runImageOrVideo(taskId, 'video', params as GenerateVideoParams)
+      result = await runAgnesVideo(taskId, params as GenerateVideoParams)
     } else if (type === 'merge') {
       result = await runMerge(taskId, params as MergeVideosParams)
     } else {
@@ -173,6 +174,36 @@ async function runTask(
     })
     await setProgress(taskId, 0, 'failed')
     await log(taskId, 'error', `Task failed: ${err.message}; trace=${JSON.stringify(err.trace || [])}`, true)
+  }
+}
+
+async function runAgnesVideo(taskId: string, params: GenerateVideoParams): Promise<TaskResult> {
+  const apiKey = process.env.AGNES_API_KEY
+  if (!apiKey) throw new Error('NO_AGNES_API_KEY')
+  await setProgress(taskId, 15)
+  // Single submission only: no key rotation or paid-provider fallback.
+  await log(taskId, 'info', `Submitting video to Agnes model=${AGNES_VIDEO_MODEL}`, true)
+  const videoId = await createAgnesVideo(apiKey, params)
+  const providerTaskId = `agnes:${videoId}`
+  await db.task.update({
+    where: { id: taskId },
+    data: { providerTaskId, providerKeyLabel: 'Agnes', providerCheckedAt: new Date() },
+  })
+  await setProgress(taskId, 30)
+  const startTs = Date.now()
+  let lastProgress = 30
+  while (true) {
+    if (Date.now() - startTs > MAX_POLL_DURATION_MS) throw new Error('POLL_TIMEOUT')
+    await sleep(POLL_INTERVAL_MS)
+    const info = await getAgnesVideoInfo(apiKey, videoId)
+    await db.task.update({ where: { id: taskId }, data: { providerCheckedAt: new Date() } }).catch(() => {})
+    if (info.status === 'completed' && info.resultUrl) {
+      await setProgress(taskId, 100)
+      return { url: info.resultUrl, providerTaskId }
+    }
+    if (info.status === 'failed') throw new Error('AGNES_VIDEO_FAILED')
+    const scaled = 30 + Math.round(((info.progress || 0) / 100) * 65)
+    if (scaled !== lastProgress) { await setProgress(taskId, scaled); lastProgress = scaled }
   }
 }
 
@@ -324,6 +355,11 @@ export async function recoverStaleTasks() {
  * consistent. Never includes key values, key ids, or provider internals.
  */
 export function publicTaskError(errMsg: string): string {
+  if (errMsg === 'NO_AGNES_API_KEY') return 'لم يتم ضبط مفتاح Agnes API في إعدادات البيئة (AGNES_API_KEY).'
+  if (errMsg.startsWith('AGNES_AUTH_ERROR')) return 'مفتاح Agnes غير صالح أو غير مصرح به.'
+  if (errMsg.startsWith('AGNES_BILLING_OR_QUOTA_ERROR')) return 'Agnes رفض الطلب بسبب الرصيد أو حد الاستخدام. لم يتم التحويل إلى مزود مدفوع.'
+  if (errMsg.startsWith('AGNES_RATE_LIMIT')) return 'تم بلوغ حد Agnes المجاني. انتظر ثم حاول مجددًا؛ لن يتم استخدام مزود مدفوع.'
+  if (errMsg.startsWith('AGNES_')) return 'تعذر توليد الفيديو عبر Agnes. لم يتم استخدام مزود مدفوع.'
   if (errMsg === 'NO_ACTIVE_KEYS') {
     return 'لا توجد مفاتيح API نشطة. أضف مفتاحًا من لوحة الإدارة.'
   }
