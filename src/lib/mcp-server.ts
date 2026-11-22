@@ -32,7 +32,7 @@ const SERVER_VERSION = '1.1.0'
 function registerTools(server: McpServer): void {
   server.tool(
     'generate_image',
-    'Generate an image from a text prompt. Model: gpt-image-2-6/flare-text-to-image. ' +
+    'Image generation is currently blocked by the zero-cost safety policy; no paid provider request will be sent. ' +
       'Returns a task_id immediately; poll with get_task every ~10s until status=succeeded.',
     {
       prompt: z.string().min(1).describe('The text prompt describing the image to generate.'),
@@ -65,8 +65,8 @@ function registerTools(server: McpServer): void {
 
   server.tool(
     'generate_video',
-    'Generate a video with native synchronized audio (dialogue/effects/music) from a text prompt. ' +
-      'Model: grok-imagine-video-1-5-preview. Returns a task_id immediately; poll with get_task.',
+    'Video generation is currently blocked by the zero-cost safety policy; no paid provider request will be sent. ' +
+      'A genuinely free local or free-tier provider must be integrated before this tool can generate media.',
     {
       prompt: z.string().min(1).describe('The text prompt describing the video to generate.'),
       aspect_ratio: z
