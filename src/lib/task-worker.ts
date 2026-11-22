@@ -372,7 +372,8 @@ export function publicTaskError(errMsg: string): string {
     if (status === 429) return 'تم بلوغ حد الطلبات لدى Agnes (HTTP 429). لم يتم استخدام مزود مدفوع.'
     if (status === 400 || status === 422) return `رفضت Agnes صيغة الطلب أو أحد المعاملات (HTTP ${status}).`
     if (status === 404) return 'لم يتم العثور على مسار API أو النموذج في Agnes (HTTP 404).'
-    if (status >= 500) return `حدث خطأ في خوادم Agnes (HTTP ${status}).`
+    if (status === 503) return 'طابور توليد الفيديو المجاني في Agnes مشغول حاليًا (HTTP 503). لم يُنشأ فيديو؛ انتظر قبل المحاولة لاحقًا. لم يتم استخدام مزود مدفوع.'
+    if (status >= 500) return `حدث خطأ مؤقت في خوادم Agnes (HTTP ${status}).`
     return `رفضت Agnes الطلب برمز HTTP ${status}.`
   }
   if (errMsg === 'AGNES_NETWORK_ERROR') return 'تعذر الاتصال بخوادم Agnes. تحقق من توفر الخدمة والشبكة.'
