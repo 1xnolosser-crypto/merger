@@ -194,7 +194,7 @@ async function runAgnesVideo(taskId: string, params: GenerateVideoParams): Promi
   let lastProgress = 30
   while (true) {
     if (Date.now() - startTs > MAX_POLL_DURATION_MS) throw new Error('POLL_TIMEOUT')
-    await sleep(POLL_INTERVAL_MS)
+    await sleep(15_000) // Respect the free-tier poll budget.
     let info
     try {
       info = await getAgnesVideoInfo(apiKey, videoId)
