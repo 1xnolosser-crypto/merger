@@ -12,7 +12,8 @@ import { Badge } from '@/components/ui/badge'
 export function StudioTab() {
   const [token, setToken] = useState('')
   const [title, setTitle] = useState('لماذا لا نشعر بدوران الأرض؟')
-  const [format, setFormat] = useState<'shorts' | 'long'>('shorts')\n  const [resolution, setResolution] = useState<'720p' | '1080p'>('720p')
+  const [format, setFormat] = useState<'shorts' | 'long'>('shorts')
+  const [resolution, setResolution] = useState<'720p' | '1080p'>('720p')
   const [sceneText, setSceneText] = useState('تخيل أنك تقف على سطح الأرض الآن.\nالأرض تدور بسرعة كبيرة، ومع ذلك لا تشعر بالحركة.\nالسر هو أن الهواء وكل ما حولك يتحرك معك تقريبًا.\nنحن نشعر بتغير السرعة، لا بالحركة المنتظمة نفسها.\nوهكذا تبدو الأرض ثابتة رغم دورانها المستمر.')
   const [narrationPath, setNarrationPath] = useState('')
   const [busy, setBusy] = useState(false)
