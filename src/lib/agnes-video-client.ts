@@ -76,9 +76,28 @@ async function requestJson(url: string, apiKey: string, init?: RequestInit): Pro
 }
 
 /**
- * Submit exactly one generation request. No retries on POST, to avoid duplicate
- * generation/cost if the provider accepted a request but the response was lost.
+ * Retry only confirmed HTTP 503 queue rejections with bounded exponential backoff.
+ * Never retry network errors, timeouts, or other HTTP statuses: those may be
+ * ambiguous and could duplicate a generation if Agnes accepted the POST.
+ * 3 retries maximum (30s, 60s, 120s); no paid-provider fallback.
  */
+async function submitWithQueueBackoff(apiKey: string, payload: Record<string, string>): Promise<any> {
+  const delaysMs = [30_000, 60_000, 120_000]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await requestJson(`${AGNES_API_ROOT}/v1/videos`, apiKey, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    } catch (error) {
+      const message = (error as Error).message
+      if (message !== 'AGNES_HTTP_503' || attempt >= delaysMs.length) throw error
+      const delay = delaysMs[attempt]
+      console.warn(`[agnes] free queue busy (503); retry ${attempt + 1}/3 after ${delay / 1000}s`)
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
+  }
+}
 export async function createAgnesVideo(apiKey: string, params: GenerateVideoParams): Promise<string> {
   if (!apiKey.trim()) throw new Error('NO_AGNES_API_KEY')
   const seconds = Math.round(params.duration ?? 8)
@@ -96,10 +115,7 @@ export async function createAgnesVideo(apiKey: string, params: GenerateVideoPara
     size: '720P',
     aspect_ratio: aspectRatio,
   }
-  const result = await requestJson(`${AGNES_API_ROOT}/v1/videos`, apiKey, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
+  const result = await submitWithQueueBackoff(apiKey, payload)
   const id = result?.video_id ?? result?.data?.video_id ?? result?.task_id ?? result?.id
   if (typeof id !== 'string' || !id.trim()) throw new Error('AGNES_NO_VIDEO_ID')
   return id
