@@ -34,6 +34,7 @@ export function StudioTab() {
         body: JSON.stringify({
           title,
           format,
+          resolution,
           scenes: scenes.map((text) => ({ text, durationSeconds: format === 'shorts' ? 8 : 12 })),
           ...(narrationPath.trim() ? { narrationPath: narrationPath.trim() } : {}),
         }),
