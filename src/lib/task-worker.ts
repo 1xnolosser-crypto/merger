@@ -15,6 +15,7 @@ import { db } from './db'
 import { withKeyRotation, type RotationTraceEntry } from './key-rotator'
 import { createTask as kieCreateTask, getTaskInfo, KieApiError } from './kie-client'
 import { mergeVideos } from './merge-service'
+import { createAgnesVideo, getAgnesVideoInfo, AGNES_VIDEO_MODEL } from './agnes-video-client'
 import {
   IMAGE_MODEL,
   VIDEO_MODEL,
@@ -133,7 +134,7 @@ async function runTask(
     if (type === 'image') {
       result = await runImageOrVideo(taskId, 'image', params as GenerateImageParams)
     } else if (type === 'video') {
-      result = await runImageOrVideo(taskId, 'video', params as GenerateVideoParams)
+      result = await runAgnesVideo(taskId, params as GenerateVideoParams)
     } else if (type === 'merge') {
       result = await runMerge(taskId, params as MergeVideosParams)
     } else {
@@ -161,6 +162,18 @@ async function runTask(
     // Sanitize: never expose key values, key ids, or kie.ai internal codes.
     const publicMsg = publicTaskError(err.message)
 
+    // Agnes HTTP 503 means the free queue did not accept the submission.
+    // Persist it for the authenticated scheduled retry instead of failing it.
+    if (type === 'video' && err.message === 'AGNES_HTTP_503') {
+      await db.task.update({
+        where: { id: taskId },
+        data: { status: 'waiting', error: null, updatedAt: new Date(), durationMs },
+      })
+      await setProgress(taskId, 15, 'waiting')
+      await log(taskId, 'warn', 'Agnes free queue busy; persisted for scheduled retry.')
+      return
+    }
+
     await db.task.update({
       where: { id: taskId },
       data: {
@@ -173,6 +186,43 @@ async function runTask(
     })
     await setProgress(taskId, 0, 'failed')
     await log(taskId, 'error', `Task failed: ${err.message}; trace=${JSON.stringify(err.trace || [])}`, true)
+  }
+}
+
+async function runAgnesVideo(taskId: string, params: GenerateVideoParams): Promise<TaskResult> {
+  const apiKey = process.env.AGNES_API_KEY
+  if (!apiKey) throw new Error('NO_AGNES_API_KEY')
+  await setProgress(taskId, 15)
+  // Single submission only: no key rotation or paid-provider fallback.
+  await log(taskId, 'info', `Submitting video to Agnes model=${AGNES_VIDEO_MODEL}`, true)
+  const videoId = await createAgnesVideo(apiKey, params)
+  const providerTaskId = `agnes:${videoId}`
+  await db.task.update({
+    where: { id: taskId },
+    data: { providerTaskId, providerKeyLabel: 'Agnes', providerCheckedAt: new Date() },
+  })
+  await setProgress(taskId, 30)
+  const startTs = Date.now()
+  let lastProgress = 30
+  while (true) {
+    if (Date.now() - startTs > MAX_POLL_DURATION_MS) throw new Error('POLL_TIMEOUT')
+    await sleep(15_000) // Respect the free-tier poll budget.
+    let info
+    try {
+      info = await getAgnesVideoInfo(apiKey, videoId)
+    } catch (pollError) {
+      await log(taskId, 'warn', `Agnes poll transient error: ${(pollError as Error).message.slice(0, 120)}`, true)
+      // Keep task alive and do not resubmit: transient polling errors can occur after accepted generation.
+      continue
+    }
+    await db.task.update({ where: { id: taskId }, data: { providerCheckedAt: new Date() } }).catch(() => {})
+    if (info.status === 'completed' && info.resultUrl) {
+      await setProgress(taskId, 100)
+      return { url: info.resultUrl, providerTaskId }
+    }
+    if (info.status === 'failed') throw new Error('AGNES_VIDEO_FAILED')
+    const scaled = 30 + Math.round(((info.progress || 0) / 100) * 65)
+    if (scaled !== lastProgress) { await setProgress(taskId, scaled); lastProgress = scaled }
   }
 }
 
@@ -319,11 +369,61 @@ export async function recoverStaleTasks() {
 }
 
 /**
+ * Re-queue at most one Agnes task per cron tick. Atomic updateMany claim
+ * prevents overlapping cron invocations from submitting the same task twice.
+ */
+export async function retryWaitingAgnesTask(): Promise<number> {
+  const cutoff = new Date(Date.now() - 5 * 60 * 1000)
+  const candidate = await db.task.findFirst({
+    where: { type: 'video', status: 'waiting', updatedAt: { lt: cutoff } },
+    orderBy: { updatedAt: 'asc' },
+  })
+  if (!candidate) return 0
+
+  const claimed = await db.task.updateMany({
+    where: { id: candidate.id, status: 'waiting', updatedAt: { lt: cutoff } },
+    data: { status: 'queued', updatedAt: new Date(), error: null },
+  })
+  if (claimed.count !== 1) return 0
+
+  let params: TaskParams
+  try {
+    params = JSON.parse(candidate.params) as TaskParams
+  } catch {
+    await db.task.update({
+      where: { id: candidate.id },
+      data: { status: 'failed', error: 'تعذر قراءة بيانات المهمة المحفوظة.', completedAt: new Date(), updatedAt: new Date() },
+    })
+    return 0
+  }
+  scheduleTaskRun(candidate.id, 'video', params)
+  return 1
+}
+
+/**
  * Map an internal error to a sanitized, user-facing Arabic message.
  * Shared by the worker and the on-demand refresher so both surfaces stay
  * consistent. Never includes key values, key ids, or provider internals.
  */
 export function publicTaskError(errMsg: string): string {
+  if (errMsg === 'NO_AGNES_API_KEY') return 'لم يتم ضبط مفتاح Agnes API في إعدادات البيئة (AGNES_API_KEY).'
+  // Expose only the numeric HTTP status; never expose provider response bodies or credentials.
+  const http = errMsg.match(/^AGNES_HTTP_([0-9]{3})$/)
+  if (http) {
+    const status = Number(http[1])
+    if (status === 401 || status === 403) return `رفضت Agnes المصادقة (HTTP ${status}). تحقق من صلاحية مفتاح API.`
+    if (status === 402) return 'رفضت Agnes الطلب بسبب الرصيد أو الحصة (HTTP 402). لم يتم استخدام مزود مدفوع.'
+    if (status === 429) return 'تم بلوغ حد الطلبات لدى Agnes (HTTP 429). لم يتم استخدام مزود مدفوع.'
+    if (status === 400 || status === 422) return `رفضت Agnes صيغة الطلب أو أحد المعاملات (HTTP ${status}).`
+    if (status === 404) return 'لم يتم العثور على مسار API أو النموذج في Agnes (HTTP 404).'
+    if (status === 503) return 'طابور توليد الفيديو المجاني في Agnes مشغول حاليًا (HTTP 503). لم يُنشأ فيديو؛ انتظر قبل المحاولة لاحقًا. لم يتم استخدام مزود مدفوع.'
+    if (status >= 500) return `حدث خطأ مؤقت في خوادم Agnes (HTTP ${status}).`
+    return `رفضت Agnes الطلب برمز HTTP ${status}.`
+  }
+  if (errMsg === 'AGNES_NETWORK_ERROR') return 'تعذر الاتصال بخوادم Agnes. تحقق من توفر الخدمة والشبكة.'
+  if (errMsg === 'AGNES_INVALID_RESPONSE') return 'أعادت Agnes استجابة غير صالحة.'
+  if (errMsg === 'AGNES_NO_VIDEO_ID') return 'قبلت Agnes الطلب دون إرجاع معرّف فيديو صالح.'
+  if (errMsg.startsWith('AGNES_')) return 'تعذر توليد الفيديو عبر Agnes. لم يتم استخدام مزود مدفوع.'
   if (errMsg === 'NO_ACTIVE_KEYS') {
     return 'لا توجد مفاتيح API نشطة. أضف مفتاحًا من لوحة الإدارة.'
   }
@@ -398,6 +498,38 @@ export async function refreshTaskFromProvider(taskId: string): Promise<unknown> 
   if (checkedAge < REFRESH_MIN_INTERVAL_MS) return task
   if (Date.now() - new Date(task.createdAt).getTime() > PROVIDER_MAX_AGE_MS) {
     return await markTaskFailed(task.id, publicTaskError('POLL_TIMEOUT'))
+  }
+
+  // Agnes tasks are marked with a provider prefix; poll with the configured
+  // Agnes key and video_id/model_name. Never route these to Kie or paid providers.
+  if (task.providerTaskId.startsWith('agnes:')) {
+    if (checkedAge < 15_000) return task
+    const agnesKey = process.env.AGNES_API_KEY
+    if (!agnesKey) return await markTaskFailed(task.id, 'لم يتم ضبط مفتاح Agnes (AGNES_API_KEY).')
+    const videoId = task.providerTaskId.slice('agnes:'.length)
+    let agnesInfo
+    try {
+      agnesInfo = await getAgnesVideoInfo(agnesKey, videoId)
+    } catch (e) {
+      await log(task.id, 'warn', `refresh Agnes error: ${(e as Error).message.slice(0, 120)}`, true)
+      await db.task.update({ where: { id: task.id }, data: { providerCheckedAt: new Date() } }).catch(() => {})
+      return task
+    }
+    await db.task.update({ where: { id: task.id }, data: { providerCheckedAt: new Date() } }).catch(() => {})
+    if (agnesInfo.status === 'failed') return await markTaskFailed(task.id, 'فشل توليد الفيديو عبر Agnes. لم يتم استخدام مزود مدفوع.')
+    if (agnesInfo.status === 'completed' && agnesInfo.resultUrl) {
+      const result: TaskResult = { url: agnesInfo.resultUrl, providerTaskId: task.providerTaskId }
+      const completedAt = new Date()
+      await db.task.update({
+        where: { id: task.id },
+        data: { status: 'succeeded', progress: 100, result: JSON.stringify(result), completedAt, updatedAt: completedAt },
+      })
+      emitProgress(task.id, 100, 'succeeded')
+      await log(task.id, 'info', 'Agnes video task completed', false)
+      return await db.task.findUnique({ where: { id: task.id } })
+    }
+    if (agnesInfo.progress !== undefined) await setProgress(task.id, 30 + Math.round(Math.max(0, Math.min(100, agnesInfo.progress)) * 0.65))
+    return await db.task.findUnique({ where: { id: task.id } })
   }
 
   // The key that submitted the task is the one that may poll it.
