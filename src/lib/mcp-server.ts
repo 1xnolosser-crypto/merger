@@ -66,7 +66,7 @@ function registerTools(server: McpServer): void {
   server.tool(
     'generate_video',
     'Generate a video with native synchronized audio (dialogue/effects/music) from a text prompt. ' +
-      'Model: grok-imagine-video-1-5-preview. Returns a task_id immediately; poll with get_task.',
+      'Model: Agnes AI agnes-video-2.5-flash (free promotion, 720P only). Free model only; no paid fallback. Returns a task_id immediately; poll with get_task.',
     {
       prompt: z.string().min(1).describe('The text prompt describing the video to generate.'),
       aspect_ratio: z
@@ -80,10 +80,10 @@ function registerTools(server: McpServer): void {
       duration: z
         .number()
         .int()
-        .min(1)
-        .max(20)
+        .min(4)
+        .max(12)
         .optional()
-        .describe('Target duration in seconds (1-20). Provider may snap to nearest supported.'),
+        .describe('Target duration in seconds (4-12, Agnes Flash limits). Defaults to 8 seconds.'),
     },
     async (args) => {
       const taskId = await createTask({
