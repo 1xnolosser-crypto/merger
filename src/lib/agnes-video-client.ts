@@ -14,13 +14,10 @@ export interface AgnesVideoInfo {
   videoId?: string
 }
 
-function safeProviderError(status: number, body: string): string {
-  // Don't echo raw provider response text; it may contain request/key details.
-  if (status === 401 || status === 403) return 'AGNES_AUTH_ERROR'
-  if (status === 402) return 'AGNES_BILLING_OR_QUOTA_ERROR'
-  if (status === 429) return 'AGNES_RATE_LIMIT'
-  if (status >= 500) return 'AGNES_PROVIDER_ERROR'
-  return 'AGNES_REQUEST_ERROR'
+function safeProviderError(status: number): string {
+  // Preserve only the numeric HTTP status for internal task logs.
+  // Never log response bodies, prompts, authorization headers, or API keys.
+  return `AGNES_HTTP_${status}`
 }
 
 function parseStatus(value: unknown): AgnesVideoInfo['status'] {
@@ -67,7 +64,7 @@ async function requestJson(url: string, apiKey: string, init?: RequestInit): Pro
   if (!response.ok) {
     const status = response.status
     await response.text().catch(() => '')
-    throw new Error(safeProviderError(status, ''))
+    throw new Error(safeProviderError(status))
   }
   try {
     return await response.json()
