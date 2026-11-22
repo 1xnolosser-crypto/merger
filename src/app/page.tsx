@@ -111,6 +111,10 @@ export default function Home() {
           <TabsContent value="connection" className="mt-0">
             <ConnectionTab />
           </TabsContent>
+
+          <TabsContent value="studio" className="mt-0">
+            <StudioTab />
+          </TabsContent>
         </Tabs>
       </main>
 
