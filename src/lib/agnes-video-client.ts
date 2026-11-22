@@ -15,8 +15,6 @@ export interface AgnesVideoInfo {
 }
 
 function safeProviderError(status: number): string {
-  // Preserve only the numeric HTTP status for internal task logs.
-  // Never log response bodies, prompts, authorization headers, or API keys.
   return `AGNES_HTTP_${status}`
 }
 
@@ -63,7 +61,6 @@ async function requestJson(url: string, apiKey: string, init?: RequestInit): Pro
   }
   if (!response.ok) {
     const status = response.status
-    // Safe diagnostic: numeric status only. Never log body, prompt, or credentials.
     console.error(`[agnes] provider HTTP status=${status}`)
     await response.text().catch(() => '')
     throw new Error(safeProviderError(status))
@@ -76,13 +73,14 @@ async function requestJson(url: string, apiKey: string, init?: RequestInit): Pro
 }
 
 /**
- * Retry ONLY confirmed 503 queue rejections. Keep this short so serverless
- * workers don't spend minutes waiting while the free queue is unavailable.
- * Never retry network errors/timeouts/other statuses (ambiguous acceptance).
- * At most 2 retries (5s and 15s). Free Agnes only; no paid fallback.
+ * Agnes returns HTTP 503 when the free queue refuses a submission. Such a
+ * response means no generation was accepted, so retrying is safe. Use a
+ * bounded backoff window (10s, 25s, 45s, 70s) within the Vercel 300s route
+ * budget. Never retry network/timeouts or ambiguous responses: those could
+ * have been accepted and resubmitting might create duplicate videos.
  */
 async function submitWithQueueBackoff(apiKey: string, payload: Record<string, string>): Promise<any> {
-  const delaysMs = [5_000, 15_000]
+  const delaysMs = [10_000, 25_000, 45_000, 70_000]
   for (let attempt = 0; ; attempt++) {
     try {
       return await requestJson(`${AGNES_API_ROOT}/v1/videos`, apiKey, {
@@ -93,7 +91,7 @@ async function submitWithQueueBackoff(apiKey: string, payload: Record<string, st
       const message = (error as Error).message
       if (message !== 'AGNES_HTTP_503' || attempt >= delaysMs.length) throw error
       const delay = delaysMs[attempt]
-      console.warn(`[agnes] free queue busy (503); retry ${attempt + 1}/2 after ${delay / 1000}s`)
+      console.warn(`[agnes] free queue busy (503); retry ${attempt + 1}/${delaysMs.length} after ${delay / 1000}s`)
       await new Promise((resolve) => setTimeout(resolve, delay))
     }
   }
