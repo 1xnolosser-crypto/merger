@@ -363,9 +363,21 @@ export async function recoverStaleTasks() {
  */
 export function publicTaskError(errMsg: string): string {
   if (errMsg === 'NO_AGNES_API_KEY') return 'لم يتم ضبط مفتاح Agnes API في إعدادات البيئة (AGNES_API_KEY).'
-  if (errMsg.startsWith('AGNES_AUTH_ERROR')) return 'مفتاح Agnes غير صالح أو غير مصرح به.'
-  if (errMsg.startsWith('AGNES_BILLING_OR_QUOTA_ERROR')) return 'Agnes رفض الطلب بسبب الرصيد أو حد الاستخدام. لم يتم التحويل إلى مزود مدفوع.'
-  if (errMsg.startsWith('AGNES_RATE_LIMIT')) return 'تم بلوغ حد Agnes المجاني. انتظر ثم حاول مجددًا؛ لن يتم استخدام مزود مدفوع.'
+  // Expose only the numeric HTTP status; never expose provider response bodies or credentials.
+  const http = errMsg.match(/^AGNES_HTTP_(\\d{3})$/)
+  if (http) {
+    const status = Number(http[1])
+    if (status === 401 || status === 403) return `رفضت Agnes المصادقة (HTTP ${status}). تحقق من صلاحية مفتاح API.`
+    if (status === 402) return 'رفضت Agnes الطلب بسبب الرصيد أو الحصة (HTTP 402). لم يتم استخدام مزود مدفوع.'
+    if (status === 429) return 'تم بلوغ حد الطلبات لدى Agnes (HTTP 429). لم يتم استخدام مزود مدفوع.'
+    if (status === 400 || status === 422) return `رفضت Agnes صيغة الطلب أو أحد المعاملات (HTTP ${status}).`
+    if (status === 404) return 'لم يتم العثور على مسار API أو النموذج في Agnes (HTTP 404).'
+    if (status >= 500) return `حدث خطأ في خوادم Agnes (HTTP ${status}).`
+    return `رفضت Agnes الطلب برمز HTTP ${status}.`
+  }
+  if (errMsg === 'AGNES_NETWORK_ERROR') return 'تعذر الاتصال بخوادم Agnes. تحقق من توفر الخدمة والشبكة.'
+  if (errMsg === 'AGNES_INVALID_RESPONSE') return 'أعادت Agnes استجابة غير صالحة.'
+  if (errMsg === 'AGNES_NO_VIDEO_ID') return 'قبلت Agnes الطلب دون إرجاع معرّف فيديو صالح.'
   if (errMsg.startsWith('AGNES_')) return 'تعذر توليد الفيديو عبر Agnes. لم يتم استخدام مزود مدفوع.'
   if (errMsg === 'NO_ACTIVE_KEYS') {
     return 'لا توجد مفاتيح API نشطة. أضف مفتاحًا من لوحة الإدارة.'
