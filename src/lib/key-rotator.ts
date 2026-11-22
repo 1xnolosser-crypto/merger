@@ -2,9 +2,11 @@
 // Paid KIE generation is deliberately disabled. No API key is read, selected,
 // rotated, or sent to an external generation provider from this module.
 
+import type { ApiKey } from '@prisma/client'
+
 export interface RotationResult<T> {
   data: T
-  usedKey: never
+  usedKey: ApiKey
   attempts: 0
   trace: RotationTraceEntry[]
 }
@@ -19,11 +21,10 @@ export interface RotationTraceEntry {
 /**
  * Fail closed: the previous implementation silently rotated through KIE keys,
  * including after quota/credit errors. This project requires zero paid usage.
- * Keep the function signature to avoid breaking existing call sites, but do
- * not make any network request under any configuration.
+ * Keep the existing signature for callers, but do not make any network request.
  */
 export async function withKeyRotation<T>(
-  _fn: (key: never) => Promise<T>,
+  _fn: (key: ApiKey) => Promise<T>,
 ): Promise<RotationResult<T>> {
   throw new Error('PAID_PROVIDER_DISABLED: KIE generation is blocked by the zero-cost policy.')
 }
