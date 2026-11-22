@@ -32,10 +32,12 @@ function Render-StudioJob($Job) {
   $jobDir = Join-Path $OutputDir $safeId
   New-Item -ItemType Directory -Force -Path $jobDir | Out-Null
   $isShort = $p.format -eq 'shorts'
-  $width = if ($isShort) { 1080 } else { 1920 }
-  $height = if ($isShort) { 1920 } else { 1080 }
+  $base = if ($p.resolution -eq '1080p') { 1080 } else { 720 }
+  $width = if ($isShort) { $base } else { [int]($base * 16 / 9) }
+  $height = if ($isShort) { [int]($base * 16 / 9) } else { $base }
   $concatFile = Join-Path $jobDir 'concat.txt'
   $segmentCount = $p.scenes.Count
+  [IO.File]::WriteAllText($concatFile, '', [Text.UTF8Encoding]::new($false))
   for ($i = 0; $i -lt $segmentCount; $i++) {
     $scene = $p.scenes[$i]
     $duration = [int]$scene.durationSeconds
@@ -47,14 +49,14 @@ function Render-StudioJob($Job) {
     $imagePath = [string]$scene.imagePath
     if ($imagePath -and (Test-Path -LiteralPath $imagePath -PathType Leaf)) {
       $vf = "scale=\${width}:\${height}:force_original_aspect_ratio=increase,crop=\${width}:\${height},setsar=1,\${draw}"
-      Invoke-FFmpeg @('-y','-hide_banner','-loglevel','error','-loop','1','-framerate','30','-i',$imagePath,'-vf',$vf,'-t',([string]$duration),'-r','30','-an','-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p',$segment)
+      Invoke-FFmpeg @('-y','-hide_banner','-loglevel','error','-loop','1','-framerate','30','-i',$imagePath,'-vf',$vf,'-t',([string]$duration),'-r','30','-an','-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p',$segment)
     } else {
       $color = if ($isShort) { '0x101827' } else { '0x111827' }
       $vf = $draw
       Invoke-FFmpeg @('-y','-hide_banner','-loglevel','error','-f','lavfi','-i',"color=c=\${color}:s=\${width}x\${height}:r=30:d=\${duration}",'-vf',$vf,'-t',([string]$duration),'-an','-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p',$segment)
     }
     $escapedSegment = $segment.Replace('\','/').Replace("'","'\'")
-    Add-Content -LiteralPath $concatFile -Value "file '$escapedSegment'" -Encoding UTF8
+    [IO.File]::AppendAllText($concatFile, "file '$escapedSegment'`n", [Text.UTF8Encoding]::new($false))
     $progress = [Math]::Min(85, 10 + [int](75 * (($i + 1) / $segmentCount)))
     try { Invoke-StudioApi '/api/studio/worker/progress' @{ task_id=$jobId; progress=$progress } | Out-Null } catch { Write-Warning "Progress update failed: $($_.Exception.Message)" }
     Write-Host ("Rendered scene {0}/{1}" -f ($i + 1), $segmentCount)
@@ -66,7 +68,7 @@ function Render-StudioJob($Job) {
   $narration = [string]$p.narrationPath
   if ($narration) {
     if (-not (Test-Path -LiteralPath $narration -PathType Leaf)) { throw "Narration file not found: $narration" }
-    Invoke-FFmpeg @('-y','-hide_banner','-loglevel','error','-i',$baseVideo,'-i',$narration,'-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-b:a','160k','-shortest','-movflags','+faststart',$outputPath)
+    Invoke-FFmpeg @('-y','-hide_banner','-loglevel','error','-i',$baseVideo,'-i',$narration,'-map','0:v:0','-map','1:a:0','-c:v','copy','-af','apad','-c:a','aac','-b:a','160k','-shortest','-movflags','+faststart',$outputPath)
   } else {
     Copy-Item -LiteralPath $baseVideo -Destination $outputPath -Force
     Write-Warning 'No narrationPath was supplied; this is a silent visual draft.'
