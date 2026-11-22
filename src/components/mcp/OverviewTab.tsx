@@ -24,16 +24,16 @@ const TOOLS: ToolMeta[] = [
     name: 'generate_image',
     arabicName: 'توليد صورة',
     icon: Image,
-    description: 'يولّد صورة من وصف نصي عبر نموذج gpt-image-2-6/flare-text-to-image.',
-    model: 'gpt-image-2-6/flare-text-to-image',
+    description: 'التوليد السحابي المدفوع متوقف حاليًا لحماية الرصيد. لم يتم ربط مولّد مجاني بديل بعد.',
+    model: 'محمي: لا توجد طلبات مدفوعة',
     returns: '{ task_id, status: "queued", progress: 0 }',
   },
   {
     name: 'generate_video',
     arabicName: 'توليد فيديو',
     icon: Video,
-    description: 'يولّد فيديو بصوت أصلي متزامن (حوار/مؤثرات/موسيقى) عبر grok-imagine-video-1-5-preview.',
-    model: 'grok-imagine-video-1-5-preview',
+    description: 'التوليد السحابي المدفوع متوقف حاليًا لحماية الرصيد. لم يتم ربط مولّد مجاني بديل بعد.',
+    model: 'محمي: لا توجد طلبات مدفوعة',
     returns: '{ task_id, status: "queued", progress: 0 }',
   },
   {
@@ -99,7 +99,7 @@ export function OverviewTab({ onJump }: Props) {
                   <ShieldCheck size={12} /> لا يُنزَّل أي ملف
                 </Badge>
                 <Badge variant="outline" className="gap-1">
-                  <KeyRound size={12} /> تبديل تلقائي للمفاتيح
+                  <KeyRound size={12} /> حظر التوليد المدفوع
                 </Badge>
               </div>
             </div>
@@ -177,8 +177,8 @@ export function OverviewTab({ onJump }: Props) {
         />
         <PrincipleCard
           icon={KeyRound}
-          title="تبديل تلقائي للمفاتيح"
-          body="تُجرَّب المفاتيح بالترتيب المُضافة به. عند أي خطأ أو نفاد رصيد، يُنتقل للمفتاح التالي فورًا دون إيقاف المهمة أو إظهار الخطأ لنموذج الذكاء."
+          title="حماية من استهلاك الرصيد"
+          body="تم تعطيل مفاتيح KIE ومسار التوليد المدفوع بالكامل. لا يتم إرسال أي طلب إلى مزود مدفوع حتى عند فشل الخدمة المجانية."
         />
         <PrincipleCard
           icon={Zap}
