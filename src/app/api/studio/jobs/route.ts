@@ -20,6 +20,7 @@ export async function POST(req: Request) {
   let body: {
     title?: string
     format?: 'shorts' | 'long'
+    resolution?: '720p' | '1080p'
     scenes?: SceneInput[]
     narrationPath?: string
   }
@@ -38,6 +39,7 @@ export async function POST(req: Request) {
   if (format !== 'shorts' && format !== 'long') {
     return NextResponse.json({ error: 'format must be shorts or long.' }, { status: 400 })
   }
+  const resolution = body.resolution === '1080p' ? '1080p' : '720p'
   if (!Array.isArray(scenes) || scenes.length < 1 || scenes.length > 60) {
     return NextResponse.json({ error: 'Provide between 1 and 60 scenes.' }, { status: 400 })
   }
@@ -73,6 +75,7 @@ export async function POST(req: Request) {
   const params = {
     title,
     format,
+    resolution,
     scenes: safeScenes,
     ...(typeof body.narrationPath === 'string' && body.narrationPath.length <= 500
       ? { narrationPath: body.narrationPath }
