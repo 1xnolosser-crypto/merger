@@ -117,8 +117,8 @@ export function KeysTab({ keys, onChange }: Props) {
         </CardHeader>
         <CardContent>
           {!adding ? (
-            <Button onClick={() => setAdding(true)} variant="default">
-              <Plus size={16} /> إضافة مفتاح (معطّلة)
+            <Button disabled variant="default">
+              <Plus size={16} /> التوليد المدفوع معطّل
             </Button>
           ) : (
             <div className="space-y-3">
