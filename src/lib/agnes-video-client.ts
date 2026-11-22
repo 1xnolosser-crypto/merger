@@ -31,7 +31,7 @@ function parseStatus(value: unknown): AgnesVideoInfo['status'] {
 function findUrl(obj: any): string | undefined {
   const candidates = [obj?.url, obj?.video_url, obj?.result_url, obj?.output_url,
     obj?.data?.url, obj?.data?.video_url, obj?.result?.url, obj?.output?.url]
-  return candidates.find((v) => typeof v === 'string' && /^https?:\/\//i.test(v))
+  return candidates.find((v) => typeof v === 'string' && /^https?:\\/\\//i.test(v))
 }
 
 function normalizeInfo(payload: any): AgnesVideoInfo {
@@ -76,13 +76,13 @@ async function requestJson(url: string, apiKey: string, init?: RequestInit): Pro
 }
 
 /**
- * Retry only confirmed HTTP 503 queue rejections with bounded exponential backoff.
- * Never retry network errors, timeouts, or other HTTP statuses: those may be
- * ambiguous and could duplicate a generation if Agnes accepted the POST.
- * 3 retries maximum (30s, 60s, 120s); no paid-provider fallback.
+ * Retry ONLY confirmed 503 queue rejections. Keep this short so serverless
+ * workers don't spend minutes waiting while the free queue is unavailable.
+ * Never retry network errors/timeouts/other statuses (ambiguous acceptance).
+ * At most 2 retries (5s and 15s). Free Agnes only; no paid fallback.
  */
 async function submitWithQueueBackoff(apiKey: string, payload: Record<string, string>): Promise<any> {
-  const delaysMs = [30_000, 60_000, 120_000]
+  const delaysMs = [5_000, 15_000]
   for (let attempt = 0; ; attempt++) {
     try {
       return await requestJson(`${AGNES_API_ROOT}/v1/videos`, apiKey, {
@@ -93,11 +93,12 @@ async function submitWithQueueBackoff(apiKey: string, payload: Record<string, st
       const message = (error as Error).message
       if (message !== 'AGNES_HTTP_503' || attempt >= delaysMs.length) throw error
       const delay = delaysMs[attempt]
-      console.warn(`[agnes] free queue busy (503); retry ${attempt + 1}/3 after ${delay / 1000}s`)
+      console.warn(`[agnes] free queue busy (503); retry ${attempt + 1}/2 after ${delay / 1000}s`)
       await new Promise((resolve) => setTimeout(resolve, delay))
     }
   }
 }
+
 export async function createAgnesVideo(apiKey: string, params: GenerateVideoParams): Promise<string> {
   if (!apiKey.trim()) throw new Error('NO_AGNES_API_KEY')
   const seconds = Math.round(params.duration ?? 8)
