@@ -195,7 +195,14 @@ async function runAgnesVideo(taskId: string, params: GenerateVideoParams): Promi
   while (true) {
     if (Date.now() - startTs > MAX_POLL_DURATION_MS) throw new Error('POLL_TIMEOUT')
     await sleep(POLL_INTERVAL_MS)
-    const info = await getAgnesVideoInfo(apiKey, videoId)
+    let info
+    try {
+      info = await getAgnesVideoInfo(apiKey, videoId)
+    } catch (pollError) {
+      await log(taskId, 'warn', `Agnes poll transient error: ${(pollError as Error).message.slice(0, 120)}`, true)
+      // Keep task alive and do not resubmit: transient polling errors can occur after accepted generation.
+      continue
+    }
     await db.task.update({ where: { id: taskId }, data: { providerCheckedAt: new Date() } }).catch(() => {})
     if (info.status === 'completed' && info.resultUrl) {
       await setProgress(taskId, 100)
