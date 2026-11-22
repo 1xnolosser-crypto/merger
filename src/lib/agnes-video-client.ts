@@ -29,7 +29,7 @@ function parseStatus(value: unknown): AgnesVideoInfo['status'] {
 function findUrl(obj: any): string | undefined {
   const candidates = [obj?.url, obj?.video_url, obj?.result_url, obj?.output_url,
     obj?.data?.url, obj?.data?.video_url, obj?.result?.url, obj?.output?.url]
-  return candidates.find((v) => typeof v === 'string' && /^https?:\\/\\//i.test(v))
+  return candidates.find((v) => typeof v === 'string' && (v.startsWith('https://') || v.startsWith('http://')))
 }
 
 function normalizeInfo(payload: any): AgnesVideoInfo {
