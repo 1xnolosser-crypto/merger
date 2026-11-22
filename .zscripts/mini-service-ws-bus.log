@@ -1,0 +1,11 @@
+[ws-bus] Installing dependencies...
+bun install v1.3.14 (0d9b296a)
+
++ @libsql/client@0.18.0
++ socket.io@4.8.4
+
+32 packages installed [115.00ms]
+[ws-bus] Running bun run dev...
+$ bun --hot index.ts
+[ws-bus] DATABASE_URL not set
+error: script "dev" exited with code 1
