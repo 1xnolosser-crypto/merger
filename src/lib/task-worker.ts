@@ -378,6 +378,10 @@ export async function refreshTaskFromProvider(taskId: string): Promise<unknown> 
     )
   }
 
+  // Studio render jobs are owned by the authenticated Windows worker. This
+  // server-side refresher must never mark them stale or contact a provider.
+  if (task.type === 'studio_render') return task
+
   const updatedAtAge = Date.now() - new Date(task.updatedAt).getTime()
 
   // Merge tasks run fully in-process (download → ffmpeg → upload) — nothing to
