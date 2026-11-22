@@ -53,7 +53,7 @@ function Render-StudioJob($Job) {
     } else {
       $color = if ($isShort) { '0x101827' } else { '0x111827' }
       $vf = $draw
-      Invoke-FFmpeg @('-y','-hide_banner','-loglevel','error','-f','lavfi','-i',"color=c=\${color}:s=\${width}x\${height}:r=30:d=\${duration}",'-vf',$vf,'-t',([string]$duration),'-an','-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p',$segment)
+      Invoke-FFmpeg @('-y','-hide_banner','-loglevel','error','-f','lavfi','-i',"color=c=\${color}:s=\${width}x\${height}:r=30:d=\${duration}",'-vf',$vf,'-t',([string]$duration),'-an','-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p',$segment)
     }
     $escapedSegment = $segment.Replace('\','/').Replace("'","'\'")
     [IO.File]::AppendAllText($concatFile, "file '$escapedSegment'`n", [Text.UTF8Encoding]::new($false))
