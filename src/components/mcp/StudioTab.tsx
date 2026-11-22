@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge'
 export function StudioTab() {
   const [token, setToken] = useState('')
   const [title, setTitle] = useState('لماذا لا نشعر بدوران الأرض؟')
-  const [format, setFormat] = useState<'shorts' | 'long'>('shorts')
+  const [format, setFormat] = useState<'shorts' | 'long'>('shorts')\n  const [resolution, setResolution] = useState<'720p' | '1080p'>('720p')
   const [sceneText, setSceneText] = useState('تخيل أنك تقف على سطح الأرض الآن.\nالأرض تدور بسرعة كبيرة، ومع ذلك لا تشعر بالحركة.\nالسر هو أن الهواء وكل ما حولك يتحرك معك تقريبًا.\nنحن نشعر بتغير السرعة، لا بالحركة المنتظمة نفسها.\nوهكذا تبدو الأرض ثابتة رغم دورانها المستمر.')
   const [narrationPath, setNarrationPath] = useState('')
   const [busy, setBusy] = useState(false)
@@ -77,6 +77,13 @@ export function StudioTab() {
             <select id="studio-format" className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" value={format} onChange={(e) => setFormat(e.target.value as 'shorts' | 'long')}>
               <option value="shorts">Shorts عمودي 9:16</option>
               <option value="long">فيديو طويل أفقي 16:9</option>
+            </select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="studio-resolution">دقة التصدير</Label>
+            <select id="studio-resolution" className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" value={resolution} onChange={(e) => setResolution(e.target.value as '720p' | '1080p')}>
+              <option value="720p">720p — أخف وأسرع (موصى بها لهذا الجهاز)</option>
+              <option value="1080p">1080p — أعلى جودة وحمل أكبر</option>
             </select>
           </div>
           <div className="space-y-2">
