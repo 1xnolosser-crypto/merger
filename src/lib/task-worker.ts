@@ -369,6 +369,15 @@ export async function refreshTaskFromProvider(taskId: string): Promise<unknown> 
   if (!task) return null
   if (task.status === 'succeeded' || task.status === 'failed') return task
 
+  // Hard stop for legacy paid image/video tasks. Never poll KIE or read stored
+  // API keys from a status endpoint, even if an old task has providerTaskId.
+  if (task.type === 'image' || task.type === 'video') {
+    return await markTaskFailed(
+      task.id,
+      'تم إيقاف هذه المهمة لحماية الرصيد. لا يتم الاتصال بمزود توليد مدفوع.',
+    )
+  }
+
   const updatedAtAge = Date.now() - new Date(task.updatedAt).getTime()
 
   // Merge tasks run fully in-process (download → ffmpeg → upload) — nothing to
