@@ -1,2 +1,45 @@
+# Skills (in-repo skill sources, not part of the app)
 skills/
+
+# Dependencies
 node_modules/
+
+# Next.js build output, caches, and generated files
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment variables — NEVER commit secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.vercel
+
+# Vercel CLI local state
+.vercel/
+
+# Turso CLI
+.turso/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local DB files (only relevant for file: URLs — not used in production)
+db/
+*.db
+*.db-journal
