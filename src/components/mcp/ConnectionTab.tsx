@@ -1,10 +1,11 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { Copy, Clipboard, Terminal, MessageSquare, Code2, Bot } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { CodeSnippet } from './CodeSnippet'
+import { useOrigin } from '@/lib/use-origin'
 
 interface ClientConfig {
   id: string
@@ -17,11 +18,7 @@ interface ClientConfig {
 }
 
 export function ConnectionTab() {
-  const [baseUrl] = useState(() =>
-    typeof window !== 'undefined' ? window.location.origin : '',
-  )
-
-  const b = baseUrl || 'https://YOUR_DOMAIN'
+  const b = useOrigin()
 
   const configs = useMemo<ClientConfig[]>(() => {
     return [

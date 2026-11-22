@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
 import { Image, Video, Merge, ListChecks, Eye, Plug, Server, Zap, ShieldCheck, KeyRound } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { CodeSnippet } from './CodeSnippet'
+import { useOrigin } from '@/lib/use-origin'
 
 interface Props {
   onJump: (tab: string) => void
@@ -60,11 +60,9 @@ const TOOLS: ToolMeta[] = [
 ]
 
 export function OverviewTab({ onJump }: Props) {
-  const [baseUrl] = useState(() =>
-    typeof window !== 'undefined' ? window.location.origin : '',
-  )
+  const baseUrl = useOrigin()
 
-  const curlExample = `curl -X POST ${baseUrl || 'https://YOUR_DOMAIN'}/mcp \\
+  const curlExample = `curl -X POST ${baseUrl}/mcp \\
   -H "Accept: application/json, text/event-stream" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -123,7 +121,7 @@ export function OverviewTab({ onJump }: Props) {
             تدعم POST (لطلبات JSON-RPC)، GET (للبث SSE)، DELETE (لإنهاء الجلسة).
           </p>
           <CodeSnippet
-            code={`${baseUrl || 'https://YOUR_DOMAIN'}/mcp`}
+            code={`${baseUrl}/mcp`}
             language="URL"
             title="Endpoint URL"
           />
