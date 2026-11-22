@@ -6,6 +6,7 @@ import { OverviewTab } from '@/components/mcp/OverviewTab'
 import { KeysTab } from '@/components/mcp/KeysTab'
 import { TasksTab } from '@/components/mcp/TasksTab'
 import { ConnectionTab } from '@/components/mcp/ConnectionTab'
+import { StudioTab } from '@/components/mcp/StudioTab'
 import { Zap, Github } from 'lucide-react'
 
 interface ApiKey {
@@ -76,7 +77,7 @@ export default function Home() {
       <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-5">
         <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsList
-            className="grid grid-cols-4 w-full mb-5"
+            className="grid grid-cols-5 w-full mb-5"
             // Tailwind grid-cols-4 = 4 equal columns
           >
             <TabsTrigger value="overview">نظرة عامة</TabsTrigger>
@@ -88,6 +89,7 @@ export default function Home() {
             </TabsTrigger>
             <TabsTrigger value="tasks">المهام الحية</TabsTrigger>
             <TabsTrigger value="connection">الربط</TabsTrigger>
+            <TabsTrigger value="studio">الاستوديو</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-0">
