@@ -14,7 +14,7 @@ export function StudioTab() {
   const [title, setTitle] = useState('لماذا لا نشعر بدوران الأرض؟')
   const [format, setFormat] = useState<'shorts' | 'long'>('shorts')
   const [resolution, setResolution] = useState<'720p' | '1080p'>('720p')
-  const [sceneText, setSceneText] = useState('تخيل أنك تقف على سطح الأرض الآن.\nالأرض تدور بسرعة كبيرة، ومع ذلك لا تشعر بالحركة.\nالسر هو أن الهواء وكل ما حولك يتحرك معك تقريبًا.\nنحن نشعر بتغير السرعة، لا بالحركة المنتظمة نفسها.\nوهكذا تبدو الأرض ثابتة رغم دورانها المستمر.')
+  const [sceneText, setSceneText] = useState('تخيل أنك تقف على سطح الأرض الآن.\nالأرض تدور بسرعة كبيرة، ومع ذلك لا تشعر بالحركة.\nالسر هو أن الهواء وكل ما حولك يتحرك معك تقريبًا.\nنحن نشعر بتغير السرعة، لا بالحركة المنتظمة نفسها.\nوهكذا تبدو الأرض ثابتة رغم دورانها المستمر.\nوالآن تخيل أنك تراقب الحركة من الفضاء؛ ستلاحظ دورانًا مستمرًا ومنتظمًا.')
   const [narrationPath, setNarrationPath] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -36,7 +36,7 @@ export function StudioTab() {
           title,
           format,
           resolution,
-          scenes: scenes.map((text) => ({ text, durationSeconds: format === 'shorts' ? 8 : 12 })),
+          scenes: scenes.map((text) => ({ text, durationSeconds: format === 'shorts' ? 8 : 60 })),
           ...(narrationPath.trim() ? { narrationPath: narrationPath.trim() } : {}),
         }),
       })
@@ -91,7 +91,7 @@ export function StudioTab() {
           <div className="space-y-2">
             <Label htmlFor="studio-scenes">نصوص المشاهد (كل سطر مشهد مستقل)</Label>
             <Textarea id="studio-scenes" value={sceneText} onChange={(e) => setSceneText(e.target.value)} rows={8} className="text-sm" />
-            <p className="text-xs text-muted-foreground">Shorts: 8 ثوانٍ لكل مشهد. الفيديو الطويل: 12 ثانية لكل مشهد. يمكن إضافة الصور محليًا عبر مواصفة المهمة البرمجية.</p>
+            <p className="text-xs text-muted-foreground">Shorts: 8 ثوانٍ لكل مشهد. الفيديو الطويل: 60 ثانية لكل مشهد؛ استخدم 6–12 مشهدًا مع تعليق صوتي وصور مناسبة للوصول إلى 6–12 دقيقة. يمكن إضافة الصور محليًا عبر مواصفة المهمة البرمجية.</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="studio-audio">مسار ملف التعليق الصوتي على جهاز العامل (اختياري)</Label>
