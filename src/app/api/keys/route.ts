@@ -25,6 +25,7 @@ export async function GET() {
     createdAt: new Date(k.createdAt).toISOString(),
   }))
   return NextResponse.json({ keys: safe })
+  */
 }
 
 function maskKey(value: string): string {
@@ -34,6 +35,11 @@ function maskKey(value: string): string {
 }
 
 export async function POST(req: Request) {
+  return NextResponse.json(
+    { error: 'تم تعطيل تخزين مفاتيح KIE لأن التوليد المدفوع محظور بسياسة التكلفة الصفرية.' },
+    { status: 403 },
+  )
+  /* Legacy key creation is intentionally unreachable while paid providers are disabled.
   let body: { keyValue?: string; label?: string }
   try {
     body = await req.json()
