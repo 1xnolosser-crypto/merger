@@ -162,6 +162,18 @@ async function runTask(
     // Sanitize: never expose key values, key ids, or kie.ai internal codes.
     const publicMsg = publicTaskError(err.message)
 
+    // Agnes HTTP 503 means the free queue did not accept the submission.
+    // Persist it for the authenticated scheduled retry instead of failing it.
+    if (type === 'video' && err.message === 'AGNES_HTTP_503') {
+      await db.task.update({
+        where: { id: taskId },
+        data: { status: 'waiting', error: null, updatedAt: new Date(), durationMs },
+      })
+      await setProgress(taskId, 15, 'waiting')
+      await log(taskId, 'warn', 'Agnes free queue busy; persisted for scheduled retry.')
+      return
+    }
+
     await db.task.update({
       where: { id: taskId },
       data: {
@@ -354,6 +366,38 @@ export async function recoverStaleTasks() {
     })
     await log(t.id, 'warn', 'Recovered as failed (stale > 30m)', true)
   }
+}
+
+/**
+ * Re-queue at most one Agnes task per cron tick. Atomic updateMany claim
+ * prevents overlapping cron invocations from submitting the same task twice.
+ */
+export async function retryWaitingAgnesTask(): Promise<number> {
+  const cutoff = new Date(Date.now() - 5 * 60 * 1000)
+  const candidate = await db.task.findFirst({
+    where: { type: 'video', status: 'waiting', updatedAt: { lt: cutoff } },
+    orderBy: { updatedAt: 'asc' },
+  })
+  if (!candidate) return 0
+
+  const claimed = await db.task.updateMany({
+    where: { id: candidate.id, status: 'waiting', updatedAt: { lt: cutoff } },
+    data: { status: 'queued', updatedAt: new Date(), error: null },
+  })
+  if (claimed.count !== 1) return 0
+
+  let params: TaskParams
+  try {
+    params = JSON.parse(candidate.params) as TaskParams
+  } catch {
+    await db.task.update({
+      where: { id: candidate.id },
+      data: { status: 'failed', error: 'تعذر قراءة بيانات المهمة المحفوظة.', completedAt: new Date(), updatedAt: new Date() },
+    })
+    return 0
+  }
+  scheduleTaskRun(candidate.id, 'video', params)
+  return 1
 }
 
 /**
