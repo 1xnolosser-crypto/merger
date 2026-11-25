@@ -84,3 +84,40 @@ Write-Host "Starting the free local video studio..." -ForegroundColor Green
 if ($LASTEXITCODE -ne 0) {
   throw "Video generation stopped with exit code $LASTEXITCODE."
 }
+
+# Upload the newly rendered final MP4 directly into the ImageKit Media Library.
+# The private key is requested once and stored only in the current Windows user's
+# environment variables by setup-imagekit.ps1; it is never committed to the repo.
+$finalVideo = Get-ChildItem -LiteralPath $OutputDir -Recurse -File |
+  Where-Object { $_.Name -match '-(shorts|video)\.mp4$' } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+if (-not $finalVideo) {
+  throw "Video was rendered but the final MP4 could not be located for ImageKit upload."
+}
+
+if (-not $env:IMAGEKIT_PRIVATE_KEY) {
+  $setupScript = Join-Path $PSScriptRoot "setup-imagekit.ps1"
+  & $setupScript
+  if (-not $env:IMAGEKIT_PRIVATE_KEY) {
+    $env:IMAGEKIT_PRIVATE_KEY = [Environment]::GetEnvironmentVariable("IMAGEKIT_PRIVATE_KEY", "User")
+  }
+}
+if (-not $env:IMAGEKIT_PRIVATE_KEY) {
+  throw "ImageKit key setup did not complete. The video remains safely in the local output folder."
+}
+
+$imageKitClient = Join-Path $PSScriptRoot "imagekit_media_library.py"
+Write-Host "Uploading final video to the ImageKit Media Library..." -ForegroundColor Cyan
+$uploadJson = & py -3.12 $imageKitClient upload $finalVideo.FullName --folder "/VYROX/Shorts" --tag "VYROX" --tag "Shorts" --tag "Arabic"
+if ($LASTEXITCODE -ne 0) {
+  throw "ImageKit upload failed. The local video was preserved at: $($finalVideo.FullName)"
+}
+$uploadResult = ($uploadJson -join [Environment]::NewLine) | ConvertFrom-Json
+if (-not $uploadResult.url) {
+  throw "ImageKit returned a response without a public file URL. Review the upload response."
+}
+Write-Host "IMAGEKIT UPLOAD SUCCESSFUL" -ForegroundColor Green
+Write-Host ("Media Library URL: " + $uploadResult.url)
+Write-Host ("ImageKit File ID: " + $uploadResult.fileId)
