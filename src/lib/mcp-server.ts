@@ -32,8 +32,7 @@ const SERVER_VERSION = '1.1.0'
 function registerTools(server: McpServer): void {
   server.tool(
     'generate_image',
-    'Image generation is currently blocked by the zero-cost safety policy; no paid provider request will be sent. ' +
-      'Returns a task_id immediately; poll with get_task every ~10s until status=succeeded.',
+    'Image generation is disabled in free mode. Use the local Wikimedia Commons image workflow; no API task is submitted.',
     {
       prompt: z.string().min(1).describe('The text prompt describing the image to generate.'),
       aspect_ratio: z
@@ -54,8 +53,7 @@ function registerTools(server: McpServer): void {
 
   server.tool(
     'generate_video',
-    'Video generation is currently blocked by the zero-cost safety policy; no paid provider request will be sent. ' +
-      'A genuinely free local or free-tier provider must be integrated before this tool can generate media.',
+    'Video generation is disabled in free mode. Use scripts/run-free-video.ps1 on Windows; no Agnes, KIE, or other provider is called.',
     {
       prompt: z.string().min(1).describe('The text prompt describing the video to generate.'),
       aspect_ratio: z
