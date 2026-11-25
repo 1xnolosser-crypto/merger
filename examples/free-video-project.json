@@ -1,0 +1,26 @@
+{
+  "title": "رحلة قطرة ماء",
+  "format": "shorts",
+  "scenes": [
+    {
+      "narration": "تبدأ الحكاية من قطرة ماء في بحر واسع، تلمع تحت أشعة الشمس.",
+      "search": "ocean waves aerial sea coast"
+    },
+    {
+      "narration": "مع ارتفاع الحرارة، يتبخر جزء من الماء ويصعد بخارًا إلى السماء.",
+      "search": "water evaporation sea sunlight"
+    },
+    {
+      "narration": "في الأعلى يبرد البخار ويتكاثف حول جسيمات صغيرة، فتتكون السحب.",
+      "search": "white cumulus clouds blue sky"
+    },
+    {
+      "narration": "وعندما تكبر قطرات الماء داخل السحب، تهطل أمطار تعود إلى الأرض.",
+      "search": "rain falling green landscape"
+    },
+    {
+      "narration": "تجري المياه في الأنهار وتعود إلى البحار، فتبدأ الرحلة من جديد.",
+      "search": "river flowing into sea delta"
+    }
+  ]
+}

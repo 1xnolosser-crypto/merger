@@ -9,8 +9,8 @@
 // notifications/initialized → tools/list → tools/call and work unchanged.
 //
 // The 5 tools:
-//   1. generate_image     — text → image via gpt-image-2-6/flare-text-to-image
-//   2. generate_video     — text → video (native audio) via grok-imagine-video-1-5-preview
+//   1. generate_image     — disabled to prevent paid API calls
+//   2. generate_video     — disabled; use the local free video studio instead
 //   3. merge_videos       — ordered merge of N video URLs into one
 //   4. get_task           — poll a task by task_id
 //   5. list_recent_tasks  — last 20 tasks for context recovery
@@ -32,8 +32,7 @@ const SERVER_VERSION = '1.1.0'
 function registerTools(server: McpServer): void {
   server.tool(
     'generate_image',
-    'Image generation is currently blocked by the zero-cost safety policy; no paid provider request will be sent. ' +
-      'Returns a task_id immediately; poll with get_task every ~10s until status=succeeded.',
+    'Image generation is disabled in free mode. Use the local Wikimedia Commons image workflow; no API task is submitted.',
     {
       prompt: z.string().min(1).describe('The text prompt describing the image to generate.'),
       aspect_ratio: z
@@ -45,28 +44,16 @@ function registerTools(server: McpServer): void {
         .optional()
         .describe('Output resolution. Defaults to provider default.'),
     },
-    async (args) => {
-      const taskId = await createTask({
-        type: 'image',
-        params: {
-          prompt: args.prompt,
-          aspectRatio: args.aspect_ratio,
-          resolution: args.resolution,
-        },
-      })
-      return toolText({
-        task_id: taskId,
-        status: 'queued',
-        progress: 0,
-        watch_hint: 'Poll get_task with this task_id every ~10 seconds until status="succeeded".',
-      })
-    },
+    async () => toolText({
+      status: 'disabled',
+      error: 'التوليد السحابي للصور معطّل لضمان عدم استهلاك أي رصيد أو الاتصال بمزود مدفوع.',
+      alternative: 'استخدم صور Wikimedia Commons ذات الرخصة القابلة لإعادة الاستخدام ضمن scripts/run-free-video.ps1.',
+    }, true),
   )
 
   server.tool(
     'generate_video',
-    'Video generation is currently blocked by the zero-cost safety policy; no paid provider request will be sent. ' +
-      'A genuinely free local or free-tier provider must be integrated before this tool can generate media.',
+    'Video generation is disabled in free mode. Use scripts/run-free-video.ps1 on Windows; no Agnes, KIE, or other provider is called.',
     {
       prompt: z.string().min(1).describe('The text prompt describing the video to generate.'),
       aspect_ratio: z
@@ -85,23 +72,11 @@ function registerTools(server: McpServer): void {
         .optional()
         .describe('Target duration in seconds (1-20). Provider may snap to nearest supported.'),
     },
-    async (args) => {
-      const taskId = await createTask({
-        type: 'video',
-        params: {
-          prompt: args.prompt,
-          aspectRatio: args.aspect_ratio,
-          resolution: args.resolution,
-          duration: args.duration,
-        },
-      })
-      return toolText({
-        task_id: taskId,
-        status: 'queued',
-        progress: 0,
-        watch_hint: 'Poll get_task with this task_id every ~10 seconds until status="succeeded".',
-      })
-    },
+    async () => toolText({
+      status: 'disabled',
+      error: 'التوليد السحابي للفيديو معطّل نهائيًا في المسار المجاني؛ لن يتم الاتصال بـAgnes أو KIE أو أي مزود توليد.',
+      alternative: 'أنشئ الفيديو محليًا عبر Wikimedia Commons + Edge TTS + FFmpeg باستخدام scripts/run-free-video.ps1.',
+    }, true),
   )
 
   server.tool(
