@@ -84,7 +84,7 @@ def normalize_search_terms(query: str, fallback_search: Any = None) -> list[str]
     def add(value: Any) -> None:
         if not isinstance(value, str):
             return
-        cleaned = re.sub(r"\\s+", " ", value).strip()
+        cleaned = re.sub(r"\s+", " ", value).strip()
         key = cleaned.casefold()
         if cleaned and key not in seen:
             seen.add(key)
@@ -97,9 +97,7 @@ def normalize_search_terms(query: str, fallback_search: Any = None) -> list[str]
         for item in fallback_search:
             add(item)
 
-    # If a very specific phrase yields no reusable assets, progressively broaden
-    # it to useful pairs and single topic words without making extra API keys
-    # or accepting files whose license could not be verified.
+    # Broaden a phrase automatically only after explicit scene fallbacks.
     words = [w for w in re.findall(r"[A-Za-z0-9]+", query.lower()) if w not in {
         "the", "and", "with", "from", "into", "over", "under", "a", "an", "of"
     }]
@@ -118,81 +116,85 @@ def choose_commons_image(
 ) -> dict[str, str]:
     last_error = "No reusable image found."
     search_errors: list[str] = []
+
     for active_query in normalize_search_terms(query, fallback_search):
         try:
             pages = commons_candidates(active_query)
         except Exception as exc:
             search_errors.append(f"{active_query}: {exc}")
             continue
+
         for page in pages:
-        infos = page.get("imageinfo") or []
-        if not infos:
-            continue
-        info = infos[0]
-        mime = str(info.get("thumbmime") or info.get("mime") or "").lower()
-        if mime not in {"image/jpeg", "image/png", "image/webp"}:
-            continue
+            infos = page.get("imageinfo") or []
+            if not infos:
+                continue
+            info = infos[0]
+            mime = str(info.get("thumbmime") or info.get("mime") or "").lower()
+            if mime not in {"image/jpeg", "image/png", "image/webp"}:
+                continue
 
-        metadata = info.get("extmetadata") or {}
-        license_name = meta_value(metadata, "LicenseShortName") or meta_value(metadata, "UsageTerms")
-        if not license_is_reusable(license_name):
-            continue
+            metadata = info.get("extmetadata") or {}
+            license_name = meta_value(metadata, "LicenseShortName") or meta_value(metadata, "UsageTerms")
+            if not license_is_reusable(license_name):
+                continue
 
-        media_url = info.get("thumburl") or info.get("url")
-        parsed = urllib.parse.urlparse(str(media_url or ""))
-        if parsed.scheme != "https" or parsed.hostname != "upload.wikimedia.org":
-            continue
+            media_url = info.get("thumburl") or info.get("url")
+            parsed = urllib.parse.urlparse(str(media_url or ""))
+            if parsed.scheme != "https" or parsed.hostname != "upload.wikimedia.org":
+                continue
 
-        if int(info.get("size") or 0) > 80 * 1024 * 1024 and not info.get("thumburl"):
-            continue
+            if int(info.get("size") or 0) > 80 * 1024 * 1024 and not info.get("thumburl"):
+                continue
 
-        ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[mime]
-        destination = destination.with_suffix(ext)
-        request = urllib.request.Request(str(media_url), headers={"User-Agent": USER_AGENT})
-        try:
-            with urllib.request.urlopen(request, timeout=45) as response:
-                declared = int(response.headers.get("Content-Length") or 0)
-                if declared > max_bytes:
-                    last_error = "Image thumbnail exceeds the 12 MB limit."
-                    continue
-                total = 0
-                with destination.open("wb") as output:
-                    while True:
-                        block = response.read(128 * 1024)
-                        if not block:
-                            break
-                        total += len(block)
-                        if total > max_bytes:
-                            raise ValueError("Image exceeded the 12 MB download limit.")
-                        output.write(block)
-            if total < 10_000:
-                raise ValueError("Downloaded image is unexpectedly small.")
-        except Exception as exc:
-            destination.unlink(missing_ok=True)
-            last_error = str(exc)
-            continue
+            ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[mime]
+            output_path = destination.with_suffix(ext)
+            request = urllib.request.Request(str(media_url), headers={"User-Agent": USER_AGENT})
+            try:
+                with urllib.request.urlopen(request, timeout=45) as response:
+                    declared = int(response.headers.get("Content-Length") or 0)
+                    if declared > max_bytes:
+                        last_error = f"Image thumbnail exceeds the {max_bytes // (1024 * 1024)} MB limit."
+                        continue
+                    total = 0
+                    with output_path.open("wb") as output:
+                        while True:
+                            block = response.read(128 * 1024)
+                            if not block:
+                                break
+                            total += len(block)
+                            if total > max_bytes:
+                                raise ValueError("Image exceeded the configured download limit.")
+                            output.write(block)
+                if total < 10_000:
+                    raise ValueError("Downloaded image is unexpectedly small.")
+            except Exception as exc:
+                output_path.unlink(missing_ok=True)
+                last_error = str(exc)
+                continue
 
-        title = str(page.get("title") or "").removeprefix("File:")
-        description_url = info.get("descriptionurl") or (
-            "https://commons.wikimedia.org/wiki/" + urllib.parse.quote(str(page.get("title") or "").replace(" ", "_"))
-        )
-        return {
-            "filename": title,
-            "matched_search": active_query,
-            "author": meta_value(metadata, "Artist") or meta_value(metadata, "Credit") or "Author not stated",
-            "license": license_name,
-            "license_url": meta_value(metadata, "LicenseUrl"),
-            "source_url": str(description_url),
-            "direct_url": str(media_url),
-            "local_file": str(destination),
-            "mime": mime,
-        }
+            title = str(page.get("title") or "").removeprefix("File:")
+            description_url = info.get("descriptionurl") or (
+                "https://commons.wikimedia.org/wiki/" +
+                urllib.parse.quote(str(page.get("title") or "").replace(" ", "_"))
+            )
+            return {
+                "filename": title,
+                "matched_search": active_query,
+                "author": meta_value(metadata, "Artist") or meta_value(metadata, "Credit") or "Author not stated",
+                "license": license_name,
+                "license_url": meta_value(metadata, "LicenseUrl"),
+                "source_url": str(description_url),
+                "direct_url": str(media_url),
+                "local_file": str(output_path),
+                "mime": mime,
+            }
 
     details = "; ".join(search_errors[-3:])
     suffix = f" Search errors: {details}" if details else ""
+    attempted = normalize_search_terms(query, fallback_search)
     raise RuntimeError(
-        f"No suitable freely reusable Commons image for '{query}' after trying "
-        f"{normalize_search_terms(query, fallback_search)}. {last_error}{suffix}"
+        f"No suitable freely reusable Commons image for '{query}' after trying {attempted}. "
+        f"{last_error}{suffix}"
     )
 
 
