@@ -67,7 +67,7 @@ def commons_candidates(query: str) -> list[dict[str, Any]]:
         "generator": "search",
         "gsrsearch": query,
         "gsrnamespace": "6",
-        "gsrlimit": "15",
+        "gsrlimit": "40",
         "prop": "imageinfo",
         "iiprop": "url|mime|size|extmetadata",
         "iiurlwidth": "1600",
@@ -77,9 +77,54 @@ def commons_candidates(query: str) -> list[dict[str, Any]]:
     return (payload.get("query") or {}).get("pages") or []
 
 
-def choose_commons_image(query: str, destination: Path, max_bytes: int) -> dict[str, str]:
+def normalize_search_terms(query: str, fallback_search: Any = None) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        if not isinstance(value, str):
+            return
+        cleaned = re.sub(r"\\s+", " ", value).strip()
+        key = cleaned.casefold()
+        if cleaned and key not in seen:
+            seen.add(key)
+            terms.append(cleaned)
+
+    add(query)
+    if isinstance(fallback_search, str):
+        add(fallback_search)
+    elif isinstance(fallback_search, list):
+        for item in fallback_search:
+            add(item)
+
+    # If a very specific phrase yields no reusable assets, progressively broaden
+    # it to useful pairs and single topic words without making extra API keys
+    # or accepting files whose license could not be verified.
+    words = [w for w in re.findall(r"[A-Za-z0-9]+", query.lower()) if w not in {
+        "the", "and", "with", "from", "into", "over", "under", "a", "an", "of"
+    }]
+    if len(words) >= 3:
+        add(" ".join(words[:2]))
+    if len(words) >= 2:
+        add(words[0])
+    return terms
+
+
+def choose_commons_image(
+    query: str,
+    destination: Path,
+    max_bytes: int,
+    fallback_search: Any = None,
+) -> dict[str, str]:
     last_error = "No reusable image found."
-    for page in commons_candidates(query):
+    search_errors: list[str] = []
+    for active_query in normalize_search_terms(query, fallback_search):
+        try:
+            pages = commons_candidates(active_query)
+        except Exception as exc:
+            search_errors.append(f"{active_query}: {exc}")
+            continue
+        for page in pages:
         infos = page.get("imageinfo") or []
         if not infos:
             continue
@@ -133,6 +178,7 @@ def choose_commons_image(query: str, destination: Path, max_bytes: int) -> dict[
         )
         return {
             "filename": title,
+            "matched_search": active_query,
             "author": meta_value(metadata, "Artist") or meta_value(metadata, "Credit") or "Author not stated",
             "license": license_name,
             "license_url": meta_value(metadata, "LicenseUrl"),
@@ -142,7 +188,12 @@ def choose_commons_image(query: str, destination: Path, max_bytes: int) -> dict[
             "mime": mime,
         }
 
-    raise RuntimeError(f"No suitable freely reusable Commons image for '{query}'. {last_error}")
+    details = "; ".join(search_errors[-3:])
+    suffix = f" Search errors: {details}" if details else ""
+    raise RuntimeError(
+        f"No suitable freely reusable Commons image for '{query}' after trying "
+        f"{normalize_search_terms(query, fallback_search)}. {last_error}{suffix}"
+    )
 
 
 def run_checked(args: list[str], label: str) -> str:
@@ -246,6 +297,11 @@ def main() -> int:
             raise RuntimeError(f"Scene {index} needs Arabic narration text.")
         if not str(scene.get("search") or "").strip():
             raise RuntimeError(f"Scene {index} needs English Wikimedia search terms.")
+        fallback = scene.get("fallback_search", [])
+        if not isinstance(fallback, (str, list)) or (
+            isinstance(fallback, list) and any(not isinstance(item, str) for item in fallback)
+        ):
+            raise RuntimeError(f"Scene {index} fallback_search must be text or a list of text terms.")
 
     output_root = Path(args.output).expanduser().resolve()
     job_dir = output_root / safe_name(title)
@@ -282,7 +338,10 @@ def main() -> int:
         print(f"[{index}/{len(scenes)}] Finding a reusable image: {scene['search']}")
         image_path = assets_dir / f"scene-{index:02d}"
         media = choose_commons_image(
-            str(scene["search"]).strip(), image_path, max(1, args.max_image_mb) * 1024 * 1024
+            str(scene["search"]).strip(),
+            image_path,
+            max(1, args.max_image_mb) * 1024 * 1024,
+            scene.get("fallback_search"),
         )
         image_path = Path(media["local_file"])
         voice_path = audio_dir / f"scene-{index:02d}.mp3"
