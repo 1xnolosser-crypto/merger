@@ -5,9 +5,9 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Film, Download, BookOpen, ShieldCheck, Terminal } from 'lucide-react'
 
-const guideUrl = 'https://github.com/1xnolosser-crypto/merger/blob/feat/free-offline-video-pipeline/docs/free-video-studio-ar.md'
-const exampleUrl = 'https://raw.githubusercontent.com/1xnolosser-crypto/merger/feat/free-offline-video-pipeline/examples/free-video-project.json'
-const repoUrl = 'https://github.com/1xnolosser-crypto/merger/tree/feat/free-offline-video-pipeline'
+const guideUrl = 'https://github.com/1xnolosser-crypto/merger/blob/feat/free-hybrid-video-studio/docs/free-video-studio-ar.md'
+const exampleUrl = 'https://raw.githubusercontent.com/1xnolosser-crypto/merger/feat/free-hybrid-video-studio/examples/free-video-project.json'
+const repoUrl = 'https://github.com/1xnolosser-crypto/merger/tree/feat/free-hybrid-video-studio'
 
 export function StudioTab() {
   return (
