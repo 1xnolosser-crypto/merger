@@ -280,7 +280,7 @@ def main() -> int:
 
     for index, scene in enumerate(scenes, 1):
         print(f"[{index}/{len(scenes)}] Finding a reusable image: {scene['search']}")
-            image_path = assets_dir / f"scene-{index:02d}"
+        image_path = assets_dir / f"scene-{index:02d}"
         media = choose_commons_image(
             str(scene["search"]).strip(), image_path, max(1, args.max_image_mb) * 1024 * 1024
         )
