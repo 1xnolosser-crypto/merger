@@ -1,0 +1,2 @@
+# Optional dependency for Cloudflare R2 upload only; not needed for local rendering.
+boto3>=1.35,<2.0
