@@ -97,6 +97,12 @@ def delete_file(file_id: str) -> Any:
     return api_json("DELETE", "/files/" + urllib.parse.quote(file_id, safe=""))
 
 
+def copy_file(source_path: str, destination_path: str, include_versions: bool = False) -> Any:
+    if not source_path.startswith("/") or not destination_path.startswith("/"):
+        raise ImageKitError("ImageKit file paths must begin with /.")
+    return api_json("POST", "/files/copy", {"sourceFilePath": source_path, "destinationPath": destination_path, "includeFileVersions": include_versions})
+
+
 def move_file(source_path: str, destination_path: str) -> Any:
     if not source_path.startswith("/") or not destination_path.startswith("/"):
         raise ImageKitError("ImageKit file paths must begin with /.")
@@ -220,6 +226,11 @@ def main() -> int:
     deleting = sub.add_parser("delete", help="Permanently delete a file and all its versions.")
     deleting.add_argument("file_id")
 
+    copying = sub.add_parser("copy", help="Copy a file to another Media Library folder.")
+    copying.add_argument("source_file_path")
+    copying.add_argument("destination_path")
+    copying.add_argument("--include-versions", action="store_true")
+
     moving = sub.add_parser("move", help="Move a file to another Media Library folder.")
     moving.add_argument("source_file_path")
     moving.add_argument("destination_path")
@@ -257,6 +268,8 @@ def main() -> int:
             result = update_file_details(args.file_id, payload)
         elif args.command == "delete":
             result = delete_file(args.file_id)
+        elif args.command == "copy":
+            result = copy_file(args.source_file_path, args.destination_path, args.include_versions)
         elif args.command == "move":
             result = move_file(args.source_file_path, args.destination_path)
         else:
