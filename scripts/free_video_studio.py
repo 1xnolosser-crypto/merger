@@ -13,7 +13,6 @@ import shutil
 import subprocess
 import sys
 import textwrap
-import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -43,11 +42,15 @@ def license_is_reusable(name: str) -> bool:
     value = re.sub(r"\s+", " ", name.strip().lower())
     if not value:
         return False
+    # Exclude NonCommercial, NoDerivatives, and ShareAlike variants.
+    # This keeps the resulting video straightforward to reuse and publish.
+    if value.startswith(("cc by-sa", "cc by-nc", "cc by-nd")):
+        return False
+    if "noncommercial" in value or "non-commercial" in value:
+        return False
     if value.startswith(("cc0", "public domain", "pd-", "pd ")):
         return True
-    if re.match(r"^cc by(?:-sa)?(?:\s|[-0-9])", value):
-        return True
-    return False
+    return re.match(r"^cc by(?:\s|$)", value) is not None
 
 
 def http_json(url: str) -> dict[str, Any]:
@@ -74,7 +77,7 @@ def commons_candidates(query: str) -> list[dict[str, Any]]:
     return (payload.get("query") or {}).get("pages") or []
 
 
-def choose_commons_image(query: str, destination: Path) -> dict[str, str]:
+def choose_commons_image(query: str, destination: Path, max_bytes: int) -> dict[str, str]:
     last_error = "No reusable image found."
     for page in commons_candidates(query):
         infos = page.get("imageinfo") or []
@@ -99,11 +102,12 @@ def choose_commons_image(query: str, destination: Path) -> dict[str, str]:
             continue
 
         ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[mime]
+        destination = destination.with_suffix(ext)
         request = urllib.request.Request(str(media_url), headers={"User-Agent": USER_AGENT})
         try:
             with urllib.request.urlopen(request, timeout=45) as response:
                 declared = int(response.headers.get("Content-Length") or 0)
-                if declared > MAX_IMAGE_BYTES:
+                if declared > max_bytes:
                     last_error = "Image thumbnail exceeds the 12 MB limit."
                     continue
                 total = 0
@@ -113,7 +117,7 @@ def choose_commons_image(query: str, destination: Path) -> dict[str, str]:
                         if not block:
                             break
                         total += len(block)
-                        if total > MAX_IMAGE_BYTES:
+                        if total > max_bytes:
                             raise ValueError("Image exceeded the 12 MB download limit.")
                         output.write(block)
             if total < 10_000:
@@ -276,9 +280,11 @@ def main() -> int:
 
     for index, scene in enumerate(scenes, 1):
         print(f"[{index}/{len(scenes)}] Finding a reusable image: {scene['search']}")
-        extension = ".jpg"
-        image_path = assets_dir / f"scene-{index:02d}{extension}"
-        media = choose_commons_image(str(scene["search"]).strip(), image_path)
+            image_path = assets_dir / f"scene-{index:02d}"
+        media = choose_commons_image(
+            str(scene["search"]).strip(), image_path, max(1, args.max_image_mb) * 1024 * 1024
+        )
+        image_path = Path(media["local_file"])
         voice_path = audio_dir / f"scene-{index:02d}.mp3"
         print(f"[{index}/{len(scenes)}] Creating Arabic narration...")
         asyncio.run(make_voice(str(scene["narration"]).strip(), voice_path, args.voice))
