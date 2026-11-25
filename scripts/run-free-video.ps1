@@ -34,11 +34,22 @@ if (-not (Test-Path -LiteralPath $SpecPath)) {
   throw "Video specification not found: $SpecPath"
 }
 
-& py -3.12 -c "import edge_tts" 2>$null
-if ($LASTEXITCODE -ne 0) {
+# Capture stderr as text so PowerShell's Stop preference does not abort
+# on the expected first-run ModuleNotFoundError from the import check.
+$edgeCheckOutput = & py -3.12 -c "import edge_tts" 2>&1
+$edgeCheckCode = $LASTEXITCODE
+
+if ($edgeCheckCode -ne 0) {
   Write-Host "Installing the free Edge TTS helper (no API key or subscription)..." -ForegroundColor Cyan
-  & py -3.12 -m pip install --user -r $requirements
-  if ($LASTEXITCODE -ne 0) { throw "Could not install edge-tts." }
+  $installOutput = & py -3.12 -m pip install --user -r $requirements 2>&1
+  $installCode = $LASTEXITCODE
+  $installOutput | ForEach-Object { Write-Host ([string]$_) }
+  if ($installCode -ne 0) { throw "Could not install edge-tts. See pip output above." }
+
+  $verifyOutput = & py -3.12 -c "import edge_tts; print('edge-tts ready')" 2>&1
+  $verifyCode = $LASTEXITCODE
+  $verifyOutput | ForEach-Object { Write-Host ([string]$_) }
+  if ($verifyCode -ne 0) { throw "edge-tts installation could not be verified." }
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
