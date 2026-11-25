@@ -97,6 +97,13 @@ if (-not $finalVideo) {
   throw "Video was rendered but the final MP4 could not be located for ImageKit upload."
 }
 
+# ImageKit free tier currently limits an individual uploaded file to 100 MB.
+# Stop before upload rather than triggering a paid overage or alternate provider.
+$maxImageKitBytes = 100MB
+if ($finalVideo.Length -gt $maxImageKitBytes) {
+  throw "The rendered video is $([math]::Round($finalVideo.Length / 1MB, 1)) MB; ImageKit free-tier single-file limit is 100 MB. Local video preserved; no paid fallback attempted."
+}
+
 if (-not $env:IMAGEKIT_PRIVATE_KEY) {
   $setupScript = Join-Path $PSScriptRoot "setup-imagekit.ps1"
   & $setupScript
@@ -121,3 +128,38 @@ if (-not $uploadResult.url) {
 Write-Host "IMAGEKIT UPLOAD SUCCESSFUL" -ForegroundColor Green
 Write-Host ("Media Library URL: " + $uploadResult.url)
 Write-Host ("ImageKit File ID: " + $uploadResult.fileId)
+
+# Build a deterministic SEO/social handoff package for Metricool.
+# Scheduling is intentionally not faked here: it requires an authenticated Metricool action.
+$spec = Get-Content -LiteralPath $SpecPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$title = [string]$spec.title
+$narration = @($spec.scenes | ForEach-Object { ([string]$_.narration).Trim() }) -join " "
+$slug = ($title -replace "[^\p{L}\p{Nd}]+", "_").Trim("_")
+$hashtags = @("#$($slug)", "#علوم", "#معلومات", "#Shorts", "#VYROX")
+$caption = "$title`n`n$narration`n`nتابع VYROX لمزيد من الفيديوهات العلمية القصيرة.`n`n$($hashtags -join " ")"
+$seoTitle = "$title | معلومات علمية قصيرة #Shorts"
+$attribution = Join-Path $finalVideo.DirectoryName "video-description-and-attribution.txt"
+$attributionText = if (Test-Path -LiteralPath $attribution) { Get-Content -LiteralPath $attribution -Raw -Encoding UTF8 } else { "" }
+$package = [ordered]@{
+  schemaVersion = 1
+  status = "ready_for_metricool"
+  generatedAt = (Get-Date).ToString("o")
+  title = $title
+  youtubeTitle = $seoTitle
+  description = ($caption + "`n`n" + $attributionText)
+  caption = $caption
+  hashtags = $hashtags
+  tags = @($title, "علوم", "تعليم", "الطبيعة", "VYROX")
+  mediaUrl = [string]$uploadResult.url
+  imageKitFileId = [string]$uploadResult.fileId
+  localVideoPath = $finalVideo.FullName
+  fileSizeBytes = [long]$finalVideo.Length
+  attributionFile = $attribution
+  platforms = @("youtube_short", "facebook_reel")
+  publication = @{ timezone = "Africa/Cairo"; requiresMetricoolScheduling = $true }
+}
+$packagePath = Join-Path $finalVideo.DirectoryName "metricool-publish-package.json"
+$package | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $packagePath -Encoding UTF8
+Write-Host "PUBLISH PACKAGE CREATED" -ForegroundColor Green
+Write-Host ("Metricool package: " + $packagePath)
+Write-Host "The package contains the public media URL, SEO title, caption, hashtags, tags and image attribution."
