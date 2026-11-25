@@ -26,6 +26,19 @@ class FreeVideoStudioTests(unittest.TestCase):
             with self.subTest(license=license_name):
                 self.assertFalse(studio.license_is_reusable(license_name))
 
+    def test_commons_search_fallbacks_broaden_and_deduplicate(self):
+        terms = studio.normalize_search_terms(
+            "water evaporation sea sunlight",
+            ["steam rising from water", "steam", "STEAM"],
+        )
+        self.assertEqual(terms[:4], [
+            "water evaporation sea sunlight",
+            "steam rising from water",
+            "steam",
+            "water evaporation",
+        ])
+        self.assertEqual(len(terms), len({term.casefold() for term in terms}))
+
     def test_ass_time_format(self):
         self.assertEqual(studio.ass_time(1.25), "0:00:01.25")
         self.assertEqual(studio.ass_time(62.0), "0:01:02.00")
