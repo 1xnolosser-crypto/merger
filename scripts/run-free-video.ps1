@@ -134,7 +134,7 @@ Write-Host ("ImageKit File ID: " + $uploadResult.fileId)
 $spec = Get-Content -LiteralPath $SpecPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $title = [string]$spec.title
 $narration = @($spec.scenes | ForEach-Object { ([string]$_.narration).Trim() }) -join " "
-$slug = ($title -replace "[^\p{L}\p{Nd}]+", "_").Trim("_")
+$slug = ($title -replace "[^\p{L}\p{Nd}]+", "_").Trim([char[]]"_")
 $hashtags = @("#$($slug)", "#علوم", "#معلومات", "#Shorts", "#VYROX")
 $caption = "$title`n`n$narration`n`nتابع VYROX لمزيد من الفيديوهات العلمية القصيرة.`n`n$($hashtags -join " ")"
 $seoTitle = "$title | معلومات علمية قصيرة #Shorts"
