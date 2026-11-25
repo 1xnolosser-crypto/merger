@@ -81,6 +81,11 @@ export interface CreateTaskInput {
 }
 
 export async function createTask(input: CreateTaskInput): Promise<string> {
+  if (input.type === 'image' || input.type === 'video') {
+    throw new Error(
+      'PAID_PROVIDER_DISABLED: image/video generation is disabled in zero-cost mode. Use the local free video studio.',
+    )
+  }
   const id = newTaskId()
   await db.task.create({
     data: {
@@ -181,95 +186,12 @@ async function runImageOrVideo(
   kind: 'image' | 'video',
   params: GenerateImageParams | GenerateVideoParams,
 ): Promise<TaskResult> {
-  const model = kind === 'image' ? IMAGE_MODEL : VIDEO_MODEL
-  const input: Record<string, unknown> = { prompt: params.prompt }
-  if (params.aspectRatio) input.aspect_ratio = params.aspectRatio
-  if ('resolution' in params && params.resolution) input.resolution = params.resolution
-  if ('duration' in params && params.duration) input.duration = params.duration
-
-  // Step 1: submit task to kie.ai via key rotation
-  await setProgress(taskId, 15)
-  const submitResult = await withKeyRotation(async (key) => {
-    await log(
-      taskId,
-      'info',
-      `Submitting to kie.ai with key="${key.label}" model=${model}`,
-      true,
-    )
-    const providerTaskId = await kieCreateTask({ apiKey: key.keyValue, model, input })
-    return { providerTaskId, keyLabel: key.label }
-  })
-
-  // Persist the provider coordinates so an on-demand refresher (MCP get_task,
-  // /api/tasks polling) can keep the task moving even if this worker dies
-  // (serverless timeout, redeploy, cold start) before completion.
-  await db.task.update({
-    where: { id: taskId },
-    data: {
-      usedKeyLabel: submitResult.usedKey.label,
-      attempts: submitResult.attempts,
-      providerTaskId: submitResult.data.providerTaskId,
-      providerKeyLabel: submitResult.usedKey.label,
-      providerCheckedAt: new Date(),
-    },
-  })
-  await setProgress(taskId, 30)
-  await log(
-    taskId,
-    'info',
-    `Submitted to kie.ai providerTaskId=${submitResult.data.providerTaskId} via key="${submitResult.usedKey.label}"`,
-    true,
+  void taskId
+  void kind
+  void params
+  throw new Error(
+    'PAID_PROVIDER_DISABLED: image/video generation is disabled in zero-cost mode. Use the local free video studio.',
   )
-
-  // Step 2: poll for completion using the SAME key that submitted successfully
-  // (kie.ai returns the same task result regardless of which key polls,
-  //  but we use the submitting key for consistency).
-  const pollingKey = submitResult.usedKey
-  const startTs = Date.now()
-  let lastProgress = 30
-  while (true) {
-    if (Date.now() - startTs > MAX_POLL_DURATION_MS) {
-      throw new Error('POLL_TIMEOUT')
-    }
-    await sleep(POLL_INTERVAL_MS)
-
-    let info
-    try {
-      info = await getTaskInfo(pollingKey.keyValue, submitResult.data.providerTaskId)
-    } catch (e) {
-      // Polling error — log and continue if retriable
-      if (e instanceof KieApiError && e.isRetriable) {
-        await log(taskId, 'warn', `Polling retriable error: ${e.message}`, true)
-        continue
-      }
-      // Non-retriable polling error — give up
-      throw e
-    }
-
-    // Remember when we last talked to the provider (refresh throttle).
-    await db.task
-      .update({ where: { id: taskId }, data: { providerCheckedAt: new Date() } })
-      .catch(() => {})
-
-    if (info.status === 'completed' && info.resultUrl) {
-      // Push a final progress update if provider didn't reach 100
-      const finalProgress = Math.max(info.progress || 0, 100)
-      await setProgress(taskId, finalProgress)
-      return {
-        url: info.resultUrl,
-        providerTaskId: submitResult.data.providerTaskId,
-      }
-    }
-    if (info.status === 'failed') {
-      throw new Error(`PROVIDER_FAILED: ${info.error || 'unknown'}`)
-    }
-    // Still pending/processing
-    const scaled = 30 + Math.round(((info.progress || 0) / 100) * 65)
-    if (scaled !== lastProgress) {
-      await setProgress(taskId, scaled)
-      lastProgress = scaled
-    }
-  }
 }
 
 async function runMerge(taskId: string, params: MergeVideosParams): Promise<TaskResult> {
