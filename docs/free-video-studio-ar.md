@@ -53,3 +53,21 @@
 - إخراج 720p، بمعدل 25 إطارًا في الثانية، وإعداد ترميز سريع لتقليل الضغط على المعالج.
 - يعتمد نجاح توليد الصوت على اتصال الإنترنت وتوفر Edge TTS. عند تعذر الخدمة يتوقف التنفيذ برسالة واضحة ولا ينتقل إلى مزود مدفوع.
 - لا يتم رفع الفيديو إلى أي موقع؛ يظل على جهازك.
+
+## إدارة مكتبة ImageKit من PowerShell
+
+بعد ضبط المفتاح مرة واحدة عبر `scripts\\setup-imagekit.ps1`، يمكن استخدام عميل المكتبة مباشرة دون وضع المفتاح في الأوامر أو الملفات:
+
+```powershell
+py -3.12 scripts\\imagekit_media_library.py list --path "/VYROX" --type all
+py -3.12 scripts\\imagekit_media_library.py search 'name : "رحلة"'
+py -3.12 scripts\\imagekit_media_library.py details FILE_ID
+py -3.12 scripts\\imagekit_media_library.py update FILE_ID --tags "VYROX,Shorts,Arabic" --description "وصف الوسيط"
+py -3.12 scripts\\imagekit_media_library.py move "/VYROX/old.mp4" "/VYROX/Archive"
+py -3.12 scripts\\imagekit_media_library.py rename "/VYROX/old.mp4" "new-name.mp4"
+py -3.12 scripts\\imagekit_media_library.py delete FILE_ID
+```
+
+**تنبيه:** الحذف نهائي ويزيل الملف وإصداراته من المكتبة. إعادة التسمية تغيّر رابط التسليم القديم؛ لذلك لا تستخدمها بعد نشر الرابط إلا بعد تحديث المنشورات والروابط. النقل يغيّر مسار الملف. يلزم مفتاح ImageKit خاص بصلاحية قراءة وكتابة لعمليات الإدارة، أما العرض والبحث فيكفيهما مفتاح قراءة. لا يُطبع المفتاح ولا يُحفظ في Git.
+
+على الخطة المجانية، حد حجم ملف الفيديو الواحد 100MB؛ وتخضع عمليات الرفع والتخزين والتسليم لحدود الخطة الحالية. لا يتجاوز السكربت هذه الحدود ولا ينتقل تلقائيًا إلى خدمة مدفوعة.
