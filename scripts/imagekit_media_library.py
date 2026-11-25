@@ -63,9 +63,15 @@ def request_json(url: str, method: str = "GET", body: bytes | None = None,
         raise ImageKitError(f"ImageKit request failed: {exc.reason}") from None
 
 
+def api_json(method: str, endpoint: str, payload: dict[str, Any] | None = None) -> Any:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+    return request_json(API_BASE + endpoint, method=method, body=body,
+                        content_type="application/json" if body is not None else None)
+
+
 def list_files(limit: int, skip: int, path: str | None, search: str | None,
-               file_type: str) -> Any:
-    params: dict[str, str] = {"limit": str(limit), "skip": str(skip), "type": "file"}
+               file_type: str, asset_type: str = "all") -> Any:
+    params: dict[str, str] = {"limit": str(limit), "skip": str(skip), "type": asset_type}
     if path:
         params["path"] = path
     if search:
@@ -74,6 +80,33 @@ def list_files(limit: int, skip: int, path: str | None, search: str | None,
         params["fileType"] = file_type
     url = API_BASE + "/files?" + urllib.parse.urlencode(params)
     return request_json(url)
+
+
+def file_details(file_id: str) -> Any:
+    return api_json("GET", "/files/" + urllib.parse.quote(file_id, safe="") + "/details")
+
+
+def update_file_details(file_id: str, payload: dict[str, Any]) -> Any:
+    allowed = {"tags", "customMetadata", "customCoordinates", "isPublished", "isPrivateFile"}
+    if not payload or not set(payload).issubset(allowed):
+        raise ImageKitError("Update accepts only tags, customMetadata, customCoordinates, isPublished, isPrivateFile.")
+    return api_json("PATCH", "/files/" + urllib.parse.quote(file_id, safe="") + "/details", payload)
+
+
+def delete_file(file_id: str) -> Any:
+    return api_json("DELETE", "/files/" + urllib.parse.quote(file_id, safe=""))
+
+
+def move_file(source_path: str, destination_path: str) -> Any:
+    if not source_path.startswith("/") or not destination_path.startswith("/"):
+        raise ImageKitError("ImageKit file paths must begin with /.")
+    return api_json("POST", "/files/move", {"sourceFilePath": source_path, "destinationPath": destination_path})
+
+
+def rename_file(file_path: str, new_name: str, purge_cache: bool = False) -> Any:
+    if not file_path.startswith("/") or not new_name.strip():
+        raise ImageKitError("A full file path beginning with / and a new filename are required.")
+    return api_json("PUT", "/files/rename", {"filePath": file_path, "newFileName": new_name.strip(), "purgeCache": purge_cache})
 
 
 def upload_file(file_path: Path, folder: str, tags: list[str], overwrite: bool) -> Any:
@@ -160,6 +193,7 @@ def main() -> int:
     listing.add_argument("--skip", type=int, default=0)
     listing.add_argument("--path")
     listing.add_argument("--file-type", choices=("all", "image", "non-image"), default="all")
+    listing.add_argument("--type", dest="asset_type", choices=("file", "file-version", "folder", "all"), default="all")
 
     searching = sub.add_parser("search", help="Search the Media Library using ImageKit search syntax.")
     searching.add_argument("query")
@@ -172,16 +206,60 @@ def main() -> int:
     uploading.add_argument("--tag", action="append", default=[])
     uploading.add_argument("--overwrite", action="store_true")
 
+    details = sub.add_parser("details", help="Get complete details for a file ID.")
+    details.add_argument("file_id")
+
+    updating = sub.add_parser("update", help="Update tags, description metadata, or publication state.")
+    updating.add_argument("file_id")
+    updating.add_argument("--tags", help="Comma-separated replacement tag list.")
+    updating.add_argument("--custom-metadata", help="JSON object for custom metadata fields.")
+    updating.add_argument("--published", choices=("true", "false"))
+    updating.add_argument("--private", choices=("true", "false"))
+
+    deleting = sub.add_parser("delete", help="Permanently delete a file and all its versions.")
+    deleting.add_argument("file_id")
+
+    moving = sub.add_parser("move", help="Move a file to another Media Library folder.")
+    moving.add_argument("source_file_path")
+    moving.add_argument("destination_path")
+
+    renaming = sub.add_parser("rename", help="Rename a file; old delivery URLs will change.")
+    renaming.add_argument("file_path")
+    renaming.add_argument("new_file_name")
+    renaming.add_argument("--purge-cache", action="store_true")
+
     args = parser.parse_args()
     try:
         if args.command == "list":
             result = list_files(max(1, min(args.limit, 1000)), max(0, args.skip),
-                                args.path, None, args.file_type)
+                                args.path, None, args.file_type, args.asset_type)
         elif args.command == "search":
             result = list_files(max(1, min(args.limit, 1000)), max(0, args.skip),
-                                None, args.query, "all")
-        else:
+                                None, args.query, "all", "all")
+        elif args.command == "upload":
             result = upload_file(Path(args.file), args.folder, args.tag, args.overwrite)
+        elif args.command == "details":
+            result = file_details(args.file_id)
+        elif args.command == "update":
+            payload: dict[str, Any] = {}
+            if args.tags is not None:
+                payload["tags"] = [tag.strip() for tag in args.tags.split(",") if tag.strip()]
+            if args.custom_metadata is not None:
+                parsed_metadata = json.loads(args.custom_metadata)
+                if not isinstance(parsed_metadata, dict):
+                    raise ImageKitError("--custom-metadata must be a JSON object.")
+                payload["customMetadata"] = parsed_metadata
+            if args.published is not None:
+                payload["isPublished"] = args.published == "true"
+            if args.private is not None:
+                payload["isPrivateFile"] = args.private == "true"
+            result = update_file_details(args.file_id, payload)
+        elif args.command == "delete":
+            result = delete_file(args.file_id)
+        elif args.command == "move":
+            result = move_file(args.source_file_path, args.destination_path)
+        else:
+            result = rename_file(args.file_path, args.new_file_name, args.purge_cache)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except ImageKitError as exc:
