@@ -1,6 +1,6 @@
 # الاستوديو المجاني المحلي للفيديو
 
-هذا المسار هو المعتمد بدل Agnes. لا يستدعي KIE أو أي مزود لتوليد الفيديو أو الصور، ولا يحتاج إلى مفتاح API أو رصيد مدفوع أو حساب Vercel/Turso.
+هذا المسار هو المعتمد بدل Agnes. لا يستدعي KIE أو أي مزود مدفوع لتوليد الفيديو أو الصور. إنشاء الفيديو محليًا لا يحتاج إلى مفتاح API؛ أما الرفع والإدارة في ImageKit فيحتاجان مفتاح ImageKit خاصًا محفوظًا محليًا فقط.
 
 ## كيف يعمل
 
@@ -63,6 +63,7 @@ py -3.12 scripts\\imagekit_media_library.py list --path "/VYROX" --type all
 py -3.12 scripts\\imagekit_media_library.py search 'name : "رحلة"'
 py -3.12 scripts\\imagekit_media_library.py details FILE_ID
 py -3.12 scripts\\imagekit_media_library.py update FILE_ID --tags "VYROX,Shorts,Arabic" --description "وصف الوسيط"
+py -3.12 scripts\\imagekit_media_library.py copy "/VYROX/source.mp4" "/VYROX/Backup"
 py -3.12 scripts\\imagekit_media_library.py move "/VYROX/old.mp4" "/VYROX/Archive"
 py -3.12 scripts\\imagekit_media_library.py rename "/VYROX/old.mp4" "new-name.mp4"
 py -3.12 scripts\\imagekit_media_library.py delete FILE_ID
