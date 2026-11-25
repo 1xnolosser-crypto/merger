@@ -1,0 +1,33 @@
+name: Free local video studio checks
+
+on:
+  push:
+    branches:
+      - feat/free-offline-video-pipeline
+  pull_request:
+    branches:
+      - feat/free-offline-video-pipeline
+
+permissions:
+  contents: read
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile Python scripts
+        run: python -m py_compile scripts/free_video_studio.py tests/test_free_video_studio.py
+
+      - name: Validate sample video specification
+        run: python -m json.tool examples/free-video-project.json > /dev/null
+
+      - name: Run free-studio unit tests
+        run: python -m unittest discover -s tests -p "test_free_video_studio.py" -v
