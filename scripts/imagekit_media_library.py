@@ -89,7 +89,9 @@ def file_details(file_id: str) -> Any:
 def update_file_details(file_id: str, payload: dict[str, Any]) -> Any:
     allowed = {"tags", "customMetadata", "customCoordinates", "description", "publish"}
     if not payload or not set(payload).issubset(allowed):
-        raise ImageKitError("Update accepts only tags, customMetadata, customCoordinates, isPublished, isPrivateFile.")
+        raise ImageKitError("Update accepts only tags, customMetadata, customCoordinates, description, publish.")
+    if "publish" in payload and len(payload) != 1:
+        raise ImageKitError("ImageKit requires publish to be the only field in an update request.")
     return api_json("PATCH", "/files/" + urllib.parse.quote(file_id, safe="") + "/details", payload)
 
 
