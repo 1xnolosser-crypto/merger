@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/free-offline-video-pipeline
+      - feat/free-hybrid-video-studio
   pull_request:
     branches:
       - feat/free-hybrid-video-studio
