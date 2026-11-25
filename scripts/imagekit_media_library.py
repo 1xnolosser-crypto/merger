@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import mimetypes
 import os
@@ -76,45 +77,78 @@ def list_files(limit: int, skip: int, path: str | None, search: str | None,
 
 
 def upload_file(file_path: Path, folder: str, tags: list[str], overwrite: bool) -> Any:
+    """Stream the video in 1 MiB chunks so large uploads do not consume extra RAM."""
     file_path = file_path.expanduser().resolve()
     if not file_path.is_file():
         raise ImageKitError(f"File not found: {file_path}")
+    key, _ = credentials()
     boundary = "----MergerImageKit" + uuid.uuid4().hex
-    chunks: list[bytes] = []
-
-    def field(name: str, value: str) -> None:
-        chunks.extend([
-            f"--{boundary}\r\n".encode(),
-            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
-            value.encode("utf-8"),
-            b"\r\n",
-        ])
-
     mime = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    field("fileName", file_path.name)
-    field("useUniqueFileName", "true" if not overwrite else "false")
-    field("overwriteFile", "true" if overwrite else "false")
+
+    def form_field(name: str, value: str) -> bytes:
+        safe_name = name.replace('"', "")
+        return (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{safe_name}"\r\n\r\n'
+            f"{value}\r\n"
+        ).encode("utf-8")
+
+    fields = [
+        form_field("fileName", file_path.name),
+        form_field("useUniqueFileName", "true" if not overwrite else "false"),
+        form_field("overwriteFile", "true" if overwrite else "false"),
+    ]
     if folder:
-        field("folder", folder)
-    for tag in tags:
-        field("tags[]", tag)
-    chunks.extend([
-        f"--{boundary}\r\n".encode(),
-        f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'.encode(),
-        f"Content-Type: {mime}\r\n\r\n".encode(),
-    ])
-    with file_path.open("rb") as stream:
-        while True:
-            block = stream.read(1024 * 1024)
-            if not block:
-                break
-            chunks.append(block)
-    chunks.extend([b"\r\n", f"--{boundary}--\r\n".encode()])
-    body = b"".join(chunks)
-    return request_json(
-        UPLOAD_URL, method="POST", body=body,
-        content_type=f"multipart/form-data; boundary={boundary}",
-    )
+        fields.append(form_field("folder", folder))
+    if tags:
+        fields.append(form_field("tags", json.dumps(tags, ensure_ascii=False)))
+
+    filename = file_path.name.replace('"', "")
+    file_header = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {mime}\r\n\r\n"
+    ).encode("utf-8")
+    closing = f"\r\n--{boundary}--\r\n".encode("ascii")
+    file_size = file_path.stat().st_size
+    content_length = sum(len(item) for item in fields) + len(file_header) + file_size + len(closing)
+    auth = base64.b64encode((key + ":").encode("utf-8")).decode("ascii")
+    connection = http.client.HTTPSConnection("upload.imagekit.io", timeout=300)
+    try:
+        connection.putrequest("POST", "/api/v1/files/upload")
+        connection.putheader("Authorization", "Basic " + auth)
+        connection.putheader("Accept", "application/json")
+        connection.putheader("User-Agent", USER_AGENT)
+        connection.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
+        connection.putheader("Content-Length", str(content_length))
+        connection.endheaders()
+        for item in fields:
+            connection.send(item)
+        connection.send(file_header)
+        with file_path.open("rb") as stream:
+            while True:
+                block = stream.read(1024 * 1024)
+                if not block:
+                    break
+                connection.send(block)
+        connection.send(closing)
+        response = connection.getresponse()
+        raw = response.read()
+        text = raw.decode("utf-8", "replace")
+        if response.status < 200 or response.status >= 300:
+            try:
+                payload = json.loads(text)
+                detail = str(payload.get("message") or payload.get("help") or text)
+            except Exception:
+                detail = text
+            request_id = response.getheader("x-ik-requestId")
+            suffix = f" (request ID: {request_id})" if request_id else ""
+            raise ImageKitError(f"ImageKit returned HTTP {response.status}: {detail[:1200]}{suffix}")
+        return json.loads(text) if text else {}
+    except (OSError, http.client.HTTPException) as exc:
+        raise ImageKitError(f"ImageKit upload connection failed: {exc}") from None
+    finally:
+        connection.close()
 
 
 def main() -> int:
