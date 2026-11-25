@@ -46,10 +46,29 @@ if ($edgeCheckCode -ne 0) {
 
 if ($edgeCheckText -notmatch "EDGE_TTS_PRESENT") {
   Write-Host "Installing the free Edge TTS helper (no API key or subscription)..." -ForegroundColor Cyan
-  $installOutput = & py -3.12 -m pip install --user -r $requirements 2>&1
-  $installCode = $LASTEXITCODE
-  $installOutput | ForEach-Object { Write-Host ([string]$_) }
-  if ($installCode -ne 0) { throw "Could not install edge-tts. See pip output above." }
+
+  # Windows PowerShell 5.1 can convert native stderr warnings into terminating
+  # NativeCommandError records when ErrorActionPreference is Stop. Redirect both
+  # streams to files with Start-Process, then inspect the real process exit code.
+  $pipOut = Join-Path $env:TEMP ("merger-pip-out-" + [guid]::NewGuid().ToString("N") + ".txt")
+  $pipErr = Join-Path $env:TEMP ("merger-pip-err-" + [guid]::NewGuid().ToString("N") + ".txt")
+  try {
+    $pipArgs = "-3.12 -m pip install --user -r `"$requirements`""
+    $pipProcess = Start-Process -FilePath "py.exe" -ArgumentList $pipArgs -Wait -PassThru -NoNewWindow -RedirectStandardOutput $pipOut -RedirectStandardError $pipErr
+
+    if (Test-Path $pipOut) {
+      Get-Content -LiteralPath $pipOut | ForEach-Object { Write-Host ([string]$_) }
+    }
+    if (Test-Path $pipErr) {
+      Get-Content -LiteralPath $pipErr | ForEach-Object { Write-Host ([string]$_) }
+    }
+    if ($pipProcess.ExitCode -ne 0) {
+      throw "pip installation failed with exit code $($pipProcess.ExitCode)."
+    }
+  }
+  finally {
+    Remove-Item -LiteralPath $pipOut,$pipErr -Force -ErrorAction SilentlyContinue
+  }
 
   $verifyOutput = & py -3.12 -c "import importlib.util; print('EDGE_TTS_READY' if importlib.util.find_spec('edge_tts') else 'EDGE_TTS_MISSING')" 2>&1
   $verifyCode = $LASTEXITCODE
@@ -59,7 +78,6 @@ if ($edgeCheckText -notmatch "EDGE_TTS_PRESENT") {
   }
   Write-Host "edge-tts is ready." -ForegroundColor Green
 }
-
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 Write-Host "Starting the free local video studio..." -ForegroundColor Green
 & py -3.12 $worker --spec $SpecPath --output $OutputDir
