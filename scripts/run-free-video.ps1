@@ -34,22 +34,30 @@ if (-not (Test-Path -LiteralPath $SpecPath)) {
   throw "Video specification not found: $SpecPath"
 }
 
-# Capture stderr as text so PowerShell's Stop preference does not abort
-# on the expected first-run ModuleNotFoundError from the import check.
-$edgeCheckOutput = & py -3.12 -c "import edge_tts" 2>&1
+# Detect the package without importing it. The check always exits cleanly
+# when edge-tts is absent, which is important for Windows PowerShell 5.1.
+$edgeCheckOutput = & py -3.12 -c "import importlib.util; print('EDGE_TTS_PRESENT' if importlib.util.find_spec('edge_tts') else 'EDGE_TTS_MISSING')" 2>&1
 $edgeCheckCode = $LASTEXITCODE
+$edgeCheckText = ($edgeCheckOutput | Out-String).Trim()
 
 if ($edgeCheckCode -ne 0) {
+  throw "Python could not run the dependency check. Verify Python 3.12 installation."
+}
+
+if ($edgeCheckText -notmatch "EDGE_TTS_PRESENT") {
   Write-Host "Installing the free Edge TTS helper (no API key or subscription)..." -ForegroundColor Cyan
   $installOutput = & py -3.12 -m pip install --user -r $requirements 2>&1
   $installCode = $LASTEXITCODE
   $installOutput | ForEach-Object { Write-Host ([string]$_) }
   if ($installCode -ne 0) { throw "Could not install edge-tts. See pip output above." }
 
-  $verifyOutput = & py -3.12 -c "import edge_tts; print('edge-tts ready')" 2>&1
+  $verifyOutput = & py -3.12 -c "import importlib.util; print('EDGE_TTS_READY' if importlib.util.find_spec('edge_tts') else 'EDGE_TTS_MISSING')" 2>&1
   $verifyCode = $LASTEXITCODE
-  $verifyOutput | ForEach-Object { Write-Host ([string]$_) }
-  if ($verifyCode -ne 0) { throw "edge-tts installation could not be verified." }
+  $verifyText = ($verifyOutput | Out-String).Trim()
+  if ($verifyCode -ne 0 -or $verifyText -notmatch "EDGE_TTS_READY") {
+    throw "edge-tts installation could not be verified."
+  }
+  Write-Host "edge-tts is ready." -ForegroundColor Green
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
