@@ -6,7 +6,7 @@ on:
       - feat/free-offline-video-pipeline
   pull_request:
     branches:
-      - feat/free-offline-video-pipeline
+      - feat/free-hybrid-video-studio
 
 permissions:
   contents: read
