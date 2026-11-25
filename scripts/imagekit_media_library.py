@@ -87,7 +87,7 @@ def file_details(file_id: str) -> Any:
 
 
 def update_file_details(file_id: str, payload: dict[str, Any]) -> Any:
-    allowed = {"tags", "customMetadata", "customCoordinates", "isPublished", "isPrivateFile"}
+    allowed = {"tags", "customMetadata", "customCoordinates", "description", "publish"}
     if not payload or not set(payload).issubset(allowed):
         raise ImageKitError("Update accepts only tags, customMetadata, customCoordinates, isPublished, isPrivateFile.")
     return api_json("PATCH", "/files/" + urllib.parse.quote(file_id, safe="") + "/details", payload)
@@ -213,8 +213,9 @@ def main() -> int:
     updating.add_argument("file_id")
     updating.add_argument("--tags", help="Comma-separated replacement tag list.")
     updating.add_argument("--custom-metadata", help="JSON object for custom metadata fields.")
-    updating.add_argument("--published", choices=("true", "false"))
-    updating.add_argument("--private", choices=("true", "false"))
+    updating.add_argument("--description", help="Asset description text.")
+    updating.add_argument("--published", choices=("true", "false"), help="Publish or unpublish the asset.")
+    updating.add_argument("--include-versions", action="store_true", help="Apply publication status to every version.")
 
     deleting = sub.add_parser("delete", help="Permanently delete a file and all its versions.")
     deleting.add_argument("file_id")
@@ -249,10 +250,10 @@ def main() -> int:
                 if not isinstance(parsed_metadata, dict):
                     raise ImageKitError("--custom-metadata must be a JSON object.")
                 payload["customMetadata"] = parsed_metadata
+            if args.description is not None:
+                payload["description"] = args.description
             if args.published is not None:
-                payload["isPublished"] = args.published == "true"
-            if args.private is not None:
-                payload["isPrivateFile"] = args.private == "true"
+                payload["publish"] = {"isPublished": args.published == "true", "includeFileVersions": args.include_versions}
             result = update_file_details(args.file_id, payload)
         elif args.command == "delete":
             result = delete_file(args.file_id)
