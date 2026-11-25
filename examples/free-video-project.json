@@ -4,23 +4,54 @@
   "scenes": [
     {
       "narration": "تبدأ الحكاية من قطرة ماء في بحر واسع، تلمع تحت أشعة الشمس.",
-      "search": "ocean waves aerial sea coast"
+      "search": "ocean waves aerial sea coast",
+      "fallback_search": [
+        "ocean waves",
+        "sea surface",
+        "ocean coastline",
+        "waves from above"
+      ]
     },
     {
       "narration": "مع ارتفاع الحرارة، يتبخر جزء من الماء ويصعد بخارًا إلى السماء.",
-      "search": "water evaporation sea sunlight"
+      "search": "water evaporation sea sunlight",
+      "fallback_search": [
+        "steam rising from water",
+        "steam",
+        "water vapor",
+        "hot spring steam",
+        "evaporation"
+      ]
     },
     {
       "narration": "في الأعلى يبرد البخار ويتكاثف حول جسيمات صغيرة، فتتكون السحب.",
-      "search": "white cumulus clouds blue sky"
+      "search": "white cumulus clouds blue sky",
+      "fallback_search": [
+        "clouds",
+        "cumulus clouds",
+        "white clouds blue sky",
+        "cloud formation"
+      ]
     },
     {
       "narration": "وعندما تكبر قطرات الماء داخل السحب، تهطل أمطار تعود إلى الأرض.",
-      "search": "rain falling green landscape"
+      "search": "rain falling green landscape",
+      "fallback_search": [
+        "rain",
+        "rainfall",
+        "rain falling on forest",
+        "wet green landscape"
+      ]
     },
     {
       "narration": "تجري المياه في الأنهار وتعود إلى البحار، فتبدأ الرحلة من جديد.",
-      "search": "river flowing into sea delta"
+      "search": "river flowing into sea delta",
+      "fallback_search": [
+        "river",
+        "river delta",
+        "river flowing to sea",
+        "river mouth aerial"
+      ]
     }
   ]
 }
