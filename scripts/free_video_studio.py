@@ -526,6 +526,7 @@ def main() -> int:
                 ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
                 *input_args,
                 "-i", str(voice_path),
+                "-map", "0:v:0", "-map", "1:a:0",
                 "-vf", vf,
                 "-af", "apad=pad_dur=0.7",
                 "-t", f"{segment_duration:.3f}",
