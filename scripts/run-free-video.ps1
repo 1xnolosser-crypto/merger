@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
   [string]$SpecPath = (Join-Path $PSScriptRoot "..\examples\free-video-project.json"),
-  [string]$OutputDir = (Join-Path $PSScriptRoot "..\media-output")
+  [string]$OutputDir = (Join-Path $PSScriptRoot "..\media-output"),
+  [switch]$AutoTopic,
+  [ValidateSet("any", "science", "technology")][string]$TopicCategory = "any"
 )
 
 $ErrorActionPreference = "Stop"
