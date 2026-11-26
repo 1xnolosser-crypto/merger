@@ -23,6 +23,7 @@ COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 USER_AGENT = "MergerFreeVideoStudio/1.0 (local Windows video editor)"
 VOICE_DEFAULT = "ar-EG-SalmaNeural"
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
+MAX_VIDEO_BYTES = 35 * 1024 * 1024
 MAX_SCENES = 12
 
 
@@ -198,6 +199,114 @@ def choose_commons_image(
     )
 
 
+
+def choose_commons_video(
+    query: str,
+    destination: Path,
+    max_bytes: int,
+    fallback_search: Any = None,
+) -> dict[str, str]:
+    """Find and download a reusable moving video clip from Wikimedia Commons."""
+    search_errors: list[str] = []
+    last_error = "No suitable video clip found."
+    extensions = {
+        "video/mp4": ".mp4",
+        "video/webm": ".webm",
+        "video/ogg": ".ogv",
+        "video/quicktime": ".mov",
+    }
+
+    for active_query in normalize_search_terms(query, fallback_search):
+        params = {
+            "action": "query",
+            "format": "json",
+            "formatversion": "2",
+            "generator": "search",
+            "gsrsearch": f"filetype:video {active_query}",
+            "gsrnamespace": "6",
+            "gsrlimit": "30",
+            "prop": "imageinfo",
+            "iiprop": "url|mime|size|extmetadata",
+        }
+        url = COMMONS_API + "?" + urllib.parse.urlencode(params)
+        try:
+            pages = (http_json(url).get("query") or {}).get("pages") or []
+        except Exception as exc:
+            search_errors.append(f"{active_query}: {exc}")
+            continue
+
+        for page in pages:
+            infos = page.get("imageinfo") or []
+            if not infos:
+                continue
+            info = infos[0]
+            mime = str(info.get("mime") or "").lower()
+            if mime not in extensions:
+                continue
+
+            metadata = info.get("extmetadata") or {}
+            license_name = meta_value(metadata, "LicenseShortName") or meta_value(metadata, "UsageTerms")
+            if not license_is_reusable(license_name):
+                continue
+
+            size = int(info.get("size") or 0)
+            if size <= 0 or size > max_bytes:
+                last_error = f"Video file exceeds the {max_bytes // (1024 * 1024)} MB download limit."
+                continue
+
+            media_url = str(info.get("url") or "")
+            parsed = urllib.parse.urlparse(media_url)
+            if parsed.scheme != "https" or parsed.hostname != "upload.wikimedia.org":
+                continue
+
+            output_path = destination.with_suffix(extensions[mime])
+            request = urllib.request.Request(media_url, headers={"User-Agent": USER_AGENT})
+            try:
+                total = 0
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    declared = int(response.headers.get("Content-Length") or 0)
+                    if declared > max_bytes:
+                        last_error = f"Video exceeds the {max_bytes // (1024 * 1024)} MB download limit."
+                        continue
+                    with output_path.open("wb") as output:
+                        while True:
+                            block = response.read(128 * 1024)
+                            if not block:
+                                break
+                            total += len(block)
+                            if total > max_bytes:
+                                raise ValueError("Video exceeded the configured download limit.")
+                            output.write(block)
+                if total < 20_000:
+                    raise ValueError("Downloaded video is unexpectedly small.")
+            except Exception as exc:
+                output_path.unlink(missing_ok=True)
+                last_error = str(exc)
+                continue
+
+            description_url = info.get("descriptionurl") or (
+                "https://commons.wikimedia.org/wiki/" +
+                urllib.parse.quote(str(page.get("title") or "").replace(" ", "_"))
+            )
+            return {
+                "filename": str(page.get("title") or "").removeprefix("File:"),
+                "matched_search": active_query,
+                "author": meta_value(metadata, "Artist") or meta_value(metadata, "Credit") or "Author not stated",
+                "license": license_name,
+                "license_url": meta_value(metadata, "LicenseUrl"),
+                "source_url": str(description_url),
+                "direct_url": media_url,
+                "local_file": str(output_path),
+                "mime": mime,
+                "media_type": "video",
+            }
+
+    details = "; ".join(search_errors[-3:])
+    suffix = f" Search errors: {details}" if details else ""
+    raise RuntimeError(
+        f"No suitable reusable Commons video for '{query}'. {last_error}{suffix}"
+    )
+
 def run_checked(args: list[str], label: str) -> str:
     result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
@@ -284,6 +393,7 @@ def main() -> int:
     parser.add_argument("--ffmpeg", default="ffmpeg", help="FFmpeg executable.")
     parser.add_argument("--ffprobe", default="ffprobe", help="FFprobe executable.")
     parser.add_argument("--max-image-mb", type=int, default=12, help="Maximum size of each downloaded image.")
+    parser.add_argument("--max-video-mb", type=int, default=35, help="Maximum size of each downloaded Commons video clip.")
     args = parser.parse_args()
 
     spec_path = Path(args.spec).expanduser().resolve()
@@ -334,18 +444,29 @@ def main() -> int:
     segments: list[Path] = []
 
     print(f"Preparing {len(scenes)} scenes: {title}")
-    print("Free local workflow: Wikimedia Commons + Edge TTS + FFmpeg. No paid generation API.")
+    print("Free local workflow: Wikimedia Commons motion footage (video-first) + Edge TTS + FFmpeg. No paid generation API.")
 
     for index, scene in enumerate(scenes, 1):
-        print(f"[{index}/{len(scenes)}] Finding a reusable image: {scene['search']}")
-        image_path = assets_dir / f"scene-{index:02d}"
-        media = choose_commons_image(
-            str(scene["search"]).strip(),
-            image_path,
-            max(1, args.max_image_mb) * 1024 * 1024,
-            scene.get("fallback_search"),
-        )
-        image_path = Path(media["local_file"])
+        print(f"[{index}/{len(scenes)}] Finding moving video footage: {scene['search']}")
+        media_path = assets_dir / f"scene-{index:02d}"
+        try:
+            media = choose_commons_video(
+                str(scene["search"]).strip(),
+                media_path,
+                max(1, args.max_video_mb) * 1024 * 1024,
+                scene.get("fallback_search"),
+            )
+            print(f"Using real moving footage: {media['filename']}")
+        except Exception as video_error:
+            print(f"No eligible video clip; using an animated still instead: {video_error}")
+            media = choose_commons_image(
+                str(scene["search"]).strip(),
+                media_path,
+                max(1, args.max_image_mb) * 1024 * 1024,
+                scene.get("fallback_search"),
+            )
+            media["media_type"] = "image"
+        media_path = Path(media["local_file"])
         voice_path = audio_dir / f"scene-{index:02d}.mp3"
         print(f"[{index}/{len(scenes)}] Creating Arabic narration...")
         asyncio.run(make_voice(str(scene["narration"]).strip(), voice_path, args.voice))
@@ -356,11 +477,22 @@ def main() -> int:
         write_ass(ass_path, width, height, str(scene["narration"]).strip(), segment_duration)
         ass_filter = escape_filter_path(ass_path)
         fonts_dir = Path(r"C:\Windows\Fonts")
-        base_vf = (
-            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-            f"crop={width}:{height},fps={fps},"
-            f"zoompan=z='min(zoom+0.00035,1.045)':d=1:s={width}x{height}:fps={fps}"
-        )
+        if media.get("media_type") == "video":
+            # Preserve real source motion and only resize/crop/re-time the clip.
+            base_vf = (
+                f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+                f"crop={width}:{height},fps={fps}"
+            )
+        else:
+            # Stronger Ken Burns movement for the still-image fallback.
+            base_vf = (
+                f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+                f"crop={width}:{height},"
+                f"zoompan=z='min(zoom+0.0012,1.16)':"
+                f"x='iw/2-(iw/zoom/2)+sin(on/42)*9':"
+                f"y='ih/2-(ih/zoom/2)+cos(on/55)*7':"
+                f"d=1:s={width}x{height}:fps={fps}"
+            )
         if has_ass:
             vf = base_vf + f",ass=filename='{ass_filter}'"
             if fonts_dir.is_dir():
@@ -384,16 +516,21 @@ def main() -> int:
             )
 
         segment_path = video_dir / f"scene-{index:02d}.mp4"
+        input_args = (
+            ["-stream_loop", "-1", "-i", str(media_path)]
+            if media.get("media_type") == "video"
+            else ["-loop", "1", "-framerate", str(fps), "-i", str(media_path)]
+        )
         run_checked(
             [
                 ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                "-loop", "1", "-framerate", str(fps), "-i", str(image_path),
+                *input_args,
                 "-i", str(voice_path),
                 "-vf", vf,
                 "-af", "apad=pad_dur=0.7",
                 "-t", f"{segment_duration:.3f}",
                 "-r", str(fps),
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "27",
                 "-threads", "2", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "96k",
                 "-movflags", "+faststart", str(segment_path),
@@ -426,7 +563,7 @@ def main() -> int:
         title,
         "",
         "تم إنشاء الفيديو محليًا باستخدام FFmpeg والتعليق الصوتي Edge TTS.",
-        "مصادر الصور وتراخيصها:",
+        "مصادر لقطات الفيديو والصور وتراخيصها:",
     ]
     for number, item in enumerate(credits, 1):
         description_lines.extend([
