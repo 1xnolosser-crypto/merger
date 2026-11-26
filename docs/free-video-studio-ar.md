@@ -26,7 +26,7 @@
 يمكن تشغيل مخطط الموضوعات المحلي قبل إنتاج الفيديو:
 
 ```powershell
-.\\scripts\\run-free-video.ps1 -AutoTopic
+.\scripts\run-free-video.ps1 -AutoTopic
 ```
 
 يختار `scripts/topic_seo_planner.py` موضوعًا من كتالوج عربي مدمج (علوم وتقنية)، ويراعي سجل `media-output/topic-history.json` لاختيار الموضوع الأقل استخدامًا. ينشئ تلقائيًا ملف `auto-topic-project.json` يتضمن:
