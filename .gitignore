@@ -46,3 +46,9 @@ Thumbs.db
 db/
 *.db
 *.db-journal
+
+# VYROX local publishing credentials and generated state
+secrets/
+media-output*/
+logs/
+publication-state.json
