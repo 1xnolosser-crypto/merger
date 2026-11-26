@@ -36,17 +36,47 @@ def load_keyring():
         raise PublishError("Missing keyring package. Run setup-social-publishing.ps1 first.") from None
 
 
-def configure_facebook() -> None:
+def configure_facebook(page_id: str) -> None:
     import getpass
+    try:
+        import requests
+    except ImportError:
+        raise PublishError("requests package is missing. Run setup-social-publishing.ps1.") from None
     keyring = load_keyring()
-    token = getpass.getpass("Paste the Facebook PAGE access token (input hidden): ").strip()
-    if not token or len(token) < 40:
-        raise PublishError("The token is empty or unexpectedly short; nothing was saved.")
-    confirm = getpass.getpass("Paste it again to confirm: ").strip()
-    if token != confirm:
-        raise PublishError("The two entries did not match; nothing was saved.")
-    keyring.set_password(KEYRING_SERVICE, PAGE_TOKEN_USER, token)
-    print("FACEBOOK_PAGE_TOKEN_SAVED_TO_WINDOWS_CREDENTIAL_MANAGER")
+    print("Create/select your Meta app, then use Graph API Explorer to generate a USER token with:")
+    print("pages_show_list, pages_read_engagement, pages_manage_posts")
+    app_id = getpass.getpass("Meta App ID (input hidden): ").strip()
+    app_secret = getpass.getpass("Meta App Secret (input hidden): ").strip()
+    short_token = getpass.getpass("Short-lived USER access token (input hidden): ").strip()
+    if not app_id or not app_secret or not short_token:
+        raise PublishError("App ID, App Secret, and user token are all required; nothing was saved.")
+    exchange = requests.get(
+        f"https://graph.facebook.com/{GRAPH_VERSION}/oauth/access_token",
+        params={"grant_type": "fb_exchange_token", "client_id": app_id,
+                "client_secret": app_secret, "fb_exchange_token": short_token},
+        timeout=45,
+    )
+    if not exchange.ok:
+        raise PublishError(f"Meta token exchange failed HTTP {exchange.status_code}: {exchange.text[:900]}")
+    long_token = str(exchange.json().get("access_token") or "")
+    if not long_token:
+        raise PublishError("Meta did not return a long-lived user access token.")
+    pages = requests.get(
+        f"https://graph.facebook.com/{GRAPH_VERSION}/me/accounts",
+        params={"fields": "id,name,access_token", "access_token": long_token},
+        timeout=45,
+    )
+    if not pages.ok:
+        raise PublishError(f"Could not retrieve Page access tokens HTTP {pages.status_code}: {pages.text[:900]}")
+    matches = [p for p in pages.json().get("data", []) if str(p.get("id")) == str(page_id)]
+    if not matches or not matches[0].get("access_token"):
+        raise PublishError(
+            f"Page {page_id} was not returned. Ensure this user manages the Page and granted "
+            "pages_show_list, pages_read_engagement, and pages_manage_posts."
+        )
+    page_token = str(matches[0]["access_token"])
+    keyring.set_password(KEYRING_SERVICE, PAGE_TOKEN_USER, page_token)
+    print("FACEBOOK_LONG_LIVED_PAGE_TOKEN_SAVED_TO_WINDOWS_CREDENTIAL_MANAGER")
 
 
 def facebook_token() -> str:
@@ -169,7 +199,24 @@ def publish_youtube(package: dict[str, Any], video_path: Path) -> str:
     video_id = str(response.get("id") or "")
     if not video_id:
         raise PublishError("YouTube API returned no video ID.")
-    return "https://www.youtube.com/shorts/" + video_id
+    # Confirm that YouTube processed the video, not merely accepted the upload bytes.
+    deadline = time.time() + 600
+    while time.time() < deadline:
+        details = youtube.videos().list(part="status,processingDetails", id=video_id).execute()
+        items = details.get("items") or []
+        if items:
+            status = items[0].get("status") or {}
+            processing = (items[0].get("processingDetails") or {}).get("processingStatus")
+            upload_status = status.get("uploadStatus")
+            if upload_status in {"rejected", "failed", "deleted"}:
+                raise PublishError(f"YouTube rejected or failed video processing: {upload_status}")
+            if upload_status == "processed" or processing == "succeeded":
+                if status.get("privacyStatus") != "public":
+                    raise PublishError("YouTube processed the video but it is not public.")
+                return "https://www.youtube.com/shorts/" + video_id
+        print("Waiting for YouTube video processing...")
+        time.sleep(20)
+    raise PublishError("YouTube accepted the upload but processing was not confirmed within 10 minutes.")
 
 
 def publish_facebook(package: dict[str, Any], video_path: Path, page_id: str) -> str:
@@ -243,7 +290,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Publish a VYROX video to YouTube Shorts and Facebook Reels.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("authorize-youtube", help="One-time interactive Google OAuth consent.")
-    sub.add_parser("configure-facebook", help="Store a Page token in Windows Credential Manager.")
+    fb = sub.add_parser("configure-facebook", help="Exchange a user token for a long-lived Page token and store it securely.")
+    fb.add_argument("--page-id", default="1574613545729181")
     check = sub.add_parser("check", help="Check that local credentials are present.")
     check.add_argument("--page-id", default="1574613545729181")
     pub = sub.add_parser("publish", help="Publish a prepared package to both platforms.")
@@ -255,7 +303,7 @@ def main() -> int:
         if args.command == "authorize-youtube":
             authorize_youtube()
         elif args.command == "configure-facebook":
-            configure_facebook()
+            configure_facebook(args.page_id)
         elif args.command == "check":
             check_credentials(args.page_id)
         else:
