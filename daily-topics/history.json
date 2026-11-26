@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "used": [
+    {
+      "date": "2026-11-25",
+      "topicId": "water-cycle",
+      "title": "رحلة قطرة ماء: كيف تعود الأمطار إلى الأرض؟"
+    },
+    {
+      "date": "2026-11-26",
+      "topicId": "water-cycle-motion",
+      "title": "رحلة قطرة ماء"
+    }
+  ],
+  "rules": {
+    "neverRepeatTopicId": true,
+    "avoidNearDuplicateTitles": true,
+    "storeEveryGeneratedTopicBeforeTriggeringLocalRun": true
+  }
+}
