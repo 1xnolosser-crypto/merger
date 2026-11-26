@@ -169,3 +169,13 @@ print(result.final_output)
 - الجداول تُنشأ عبر `scripts/init-turso.ts` (وليس `prisma db push`) لأن SQLite CLI لا يقبل روابط libsql. Prisma Client يستخدم محوّل libsql في runtime.
 - خدمة الدمج تنزّل المقاطع إلى `/tmp` مؤقتًا، تدمجها عبر ffmpeg، ترفع النتيجة إلى tmpfiles.org، ثم تنظّف `/tmp`. هذا هو «خدمة الدمج» المسموح لها بمعالجة الملفات عابرةً.
 - المهام المعلّقة (queued/running) لأكثر من 30 دقيقة تُسترجع تلقائيًا كـ failed بواسطة خدمة WS كل دقيقتين.
+
+## اختيار الموضوع تلقائيًا
+
+لإنشاء فيديو بموضوع عربي يختاره النظام من كتالوج العلوم والتقنية، مع كتابة السيناريو وكلمات البحث وبيانات SEO، شغّل:
+
+```powershell
+.\scripts\run-free-video.ps1 -AutoTopic
+```
+
+لتحديد المجال أضف `-TopicCategory science` أو `-TopicCategory technology`. يسجل النظام الموضوعات المستخدمة في `media-output/topic-history.json` لتقليل التكرار. الاختيار تحريري من كتالوج محلي، وليس بيانات ترند أو حجم بحث مباشر.
