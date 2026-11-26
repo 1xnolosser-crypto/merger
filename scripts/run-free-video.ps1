@@ -30,6 +30,15 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue) -or
     -not (Get-Command ffprobe -ErrorAction SilentlyContinue)) {
   throw "FFmpeg and FFprobe must be installed and available on PATH."
 }
+if ($AutoTopic) {
+  $planner = Join-Path $PSScriptRoot "topic_seo_planner.py"
+  $SpecPath = Join-Path $OutputDir "auto-topic-project.json"
+  Write-Host "Selecting a fresh Arabic Shorts topic and preparing SEO metadata..." -ForegroundColor Cyan
+  & py -3.12 $planner --output $SpecPath --category $TopicCategory
+  if ($LASTEXITCODE -ne 0) {
+    throw "Automatic topic selection failed. No video generation was started."
+  }
+}
 if (-not (Test-Path -LiteralPath $SpecPath)) {
   throw "Video specification not found: $SpecPath"
 }
@@ -135,9 +144,12 @@ $spec = Get-Content -LiteralPath $SpecPath -Raw -Encoding UTF8 | ConvertFrom-Jso
 $title = [string]$spec.title
 $narration = @($spec.scenes | ForEach-Object { ([string]$_.narration).Trim() }) -join " "
 $slug = ($title -replace "[^\p{L}\p{Nd}]+", "_").Trim([char[]]"_")
-$hashtags = @("#$($slug)", "#علوم", "#معلومات", "#Shorts", "#VYROX")
-$caption = "$title`n`n$narration`n`nتابع VYROX لمزيد من الفيديوهات العلمية القصيرة.`n`n$($hashtags -join " ")"
-$seoTitle = "$title | معلومات علمية قصيرة #Shorts"
+$seo = $spec.seo
+$hashtags = if ($seo -and $seo.hashtags) { @($seo.hashtags) } else { @("#$($slug)", "#علوم", "#معلومات", "#Shorts", "#VYROX") }
+$captionLead = if ($seo -and $seo.descriptionLead) { [string]$seo.descriptionLead } else { $narration }
+$caption = "$title`n`n$captionLead`n`n$narration`n`nتابع VYROX لمزيد من الفيديوهات القصيرة.`n`n$($hashtags -join " ")"
+$seoTitle = if ($seo -and $seo.youtubeTitle) { [string]$seo.youtubeTitle } else { "$title | معلومات علمية قصيرة #Shorts" }
+$seoTags = if ($seo -and $seo.tags) { @($seo.tags) } else { @($title, "علوم", "تعليم", "الطبيعة", "VYROX") }
 $attribution = Join-Path $finalVideo.DirectoryName "video-description-and-attribution.txt"
 $attributionText = if (Test-Path -LiteralPath $attribution) { Get-Content -LiteralPath $attribution -Raw -Encoding UTF8 } else { "" }
 $package = [ordered]@{
@@ -149,7 +161,11 @@ $package = [ordered]@{
   description = ($caption + "`n`n" + $attributionText)
   caption = $caption
   hashtags = $hashtags
-  tags = @($title, "علوم", "تعليم", "الطبيعة", "VYROX")
+  tags = $seoTags
+  primaryKeyword = if ($seo) { [string]$seo.primaryKeyword } else { $title }
+  relatedKeywords = if ($seo) { @($seo.relatedKeywords) } else { @() }
+  topicId = if ($spec.topicId) { [string]$spec.topicId } else { "" }
+  editorial = if ($spec.editorial) { $spec.editorial } else { $null }
   mediaUrl = [string]$uploadResult.url
   imageKitFileId = [string]$uploadResult.fileId
   localVideoPath = $finalVideo.FullName
