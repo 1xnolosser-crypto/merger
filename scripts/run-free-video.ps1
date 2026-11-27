@@ -81,7 +81,8 @@ try {
         if ($lastCode -eq 0 -and $combined -match 'IMAGEKIT UPLOAD SUCCESSFUL') {
             Write-Host "OCTOPUS_VIDEO_RENDER_AND_IMAGEKIT_UPLOAD_CONFIRMED"
             Write-Host ("LOCAL_LOG: " + $stdout)
-            exit 0
+            $global:LASTEXITCODE = 0
+            return
         }
         if ($combined -match 'IMAGEKIT UPLOAD SUCCESSFUL') {
             throw "Upload success marker exists but process exit code was $lastCode. Refusing a duplicate upload retry."
