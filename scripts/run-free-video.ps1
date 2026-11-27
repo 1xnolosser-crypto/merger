@@ -4,7 +4,7 @@ param(
   [string]$OutputDir = (Join-Path $PSScriptRoot "..\media-output"),
   [switch]$AutoTopic,
   [ValidateSet("any", "science", "technology")][string]$TopicCategory = "any",
-  [switch]$SkipMetricoolPackage
+  [switch]$CreateMetricoolPackage
 )
 
 $ErrorActionPreference = "Stop"
@@ -145,17 +145,17 @@ Write-Host ("Media Library URL: " + $uploadResult.url)
 Write-Host ("ImageKit File ID: " + $uploadResult.fileId)
 
 # Build a deterministic SEO/social handoff package only when explicitly requested.
-if (-not $SkipMetricoolPackage) {
+if ($CreateMetricoolPackage) {
 $spec = Get-Content -LiteralPath $SpecPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $title = [string]$spec.title
 $narration = @($spec.scenes | ForEach-Object { ([string]$_.narration).Trim() }) -join " "
 $slug = ($title -replace "[^\p{L}\p{Nd}]+", "_").Trim([char[]]"_")
 $seo = $spec.seo
-$hashtags = if ($seo -and $seo.hashtags) { @($seo.hashtags) } else { @("#$($slug)", "#علوم", "#معلومات", "#Shorts", "#VYROX") }
+$hashtags = if ($seo -and $seo.hashtags) { @($seo.hashtags) } else { @("#$($slug)", "#Science", "#Facts", "#Shorts", "#VYROX") }
 $captionLead = if ($seo -and $seo.descriptionLead) { [string]$seo.descriptionLead } else { $narration }
-$caption = "$title`n`n$captionLead`n`n$narration`n`nتابع VYROX لمزيد من الفيديوهات القصيرة.`n`n$($hashtags -join " ")"
-$seoTitle = if ($seo -and $seo.youtubeTitle) { [string]$seo.youtubeTitle } else { "$title | معلومات علمية قصيرة #Shorts" }
-$seoTags = if ($seo -and $seo.tags) { @($seo.tags) } else { @($title, "علوم", "تعليم", "الطبيعة", "VYROX") }
+$caption = "$title`n`n$captionLead`n`n$narration`n`nFollow VYROX for more short videos.`n`n$($hashtags -join " ")"
+$seoTitle = if ($seo -and $seo.youtubeTitle) { [string]$seo.youtubeTitle } else { "$title | Short Science Facts #Shorts" }
+$seoTags = if ($seo -and $seo.tags) { @($seo.tags) } else { @($title, "Science", "Education", "Nature", "VYROX") }
 $attribution = Join-Path $finalVideo.DirectoryName "video-description-and-attribution.txt"
 $attributionText = if (Test-Path -LiteralPath $attribution) { Get-Content -LiteralPath $attribution -Raw -Encoding UTF8 } else { "" }
 $package = [ordered]@{
