@@ -54,6 +54,9 @@ $edge = Get-Process msedge -ErrorAction SilentlyContinue |
 if (-not $edge) {
     throw "CHATGPT_SEND_ABORTED: Microsoft Edge has no accessible browser window."
 }
+if ($edge.MainWindowTitle -notmatch "(?i)ChatGPT") {
+    throw "CHATGPT_SEND_ABORTED: The foremost Edge window title does not identify ChatGPT. No text was sent; this prevents delivery into an unrelated tab."
+}
 
 $ws = New-Object -ComObject WScript.Shell
 if (-not $ws.AppActivate([int]$edge.Id)) {
@@ -61,9 +64,16 @@ if (-not $ws.AppActivate([int]$edge.Id)) {
 }
 Start-Sleep -Milliseconds 700
 
-$composer = Get-ChatGPTComposer -WindowHandle ([IntPtr]$edge.MainWindowHandle)
+$composer = $null
+$deadline = (Get-Date).AddSeconds([Math]::Max(1, $WaitSeconds))
+do {
+    $composer = Get-ChatGPTComposer -WindowHandle ([IntPtr]$edge.MainWindowHandle)
+    if ($composer) { break }
+    Start-Sleep -Milliseconds 500
+} while ((Get-Date) -lt $deadline)
+
 if (-not $composer) {
-    throw "CHATGPT_SEND_ABORTED: The active Edge tab is not exposing a ChatGPT message composer. No text was sent. Open the intended ChatGPT conversation in the active Edge tab and retry."
+    throw "CHATGPT_SEND_ABORTED: ChatGPT composer was not found in the active Edge window. No text was sent."
 }
 
 $oldClipboard = $null
