@@ -3,7 +3,8 @@ param(
   [string]$SpecPath = (Join-Path $PSScriptRoot "..\examples\free-video-project.json"),
   [string]$OutputDir = (Join-Path $PSScriptRoot "..\media-output"),
   [switch]$AutoTopic,
-  [ValidateSet("any", "science", "technology")][string]$TopicCategory = "any"
+  [ValidateSet("any", "science", "technology")][string]$TopicCategory = "any",
+  [switch]$SkipMetricoolPackage
 )
 
 $ErrorActionPreference = "Stop"
@@ -143,8 +144,8 @@ Write-Host "IMAGEKIT UPLOAD SUCCESSFUL" -ForegroundColor Green
 Write-Host ("Media Library URL: " + $uploadResult.url)
 Write-Host ("ImageKit File ID: " + $uploadResult.fileId)
 
-# Build a deterministic SEO/social handoff package for Metricool.
-# Scheduling is intentionally not faked here: it requires an authenticated Metricool action.
+# Build a deterministic SEO/social handoff package only when explicitly requested.
+if (-not $SkipMetricoolPackage) {
 $spec = Get-Content -LiteralPath $SpecPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $title = [string]$spec.title
 $narration = @($spec.scenes | ForEach-Object { ([string]$_.narration).Trim() }) -join " "
@@ -184,3 +185,4 @@ $package | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $packagePath -Enco
 Write-Host "PUBLISH PACKAGE CREATED" -ForegroundColor Green
 Write-Host ("Metricool package: " + $packagePath)
 Write-Host "The package contains the public media URL, SEO title, caption, hashtags, tags and image attribution."
+}
