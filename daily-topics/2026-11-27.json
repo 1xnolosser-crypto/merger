@@ -1,0 +1,86 @@
+{
+  "title": "الأخطبوط: لماذا لديه أذرع ذكية بشكل مدهش؟",
+  "format": "shorts",
+  "contentCategory": "science",
+  "topicId": "octopus-brain",
+  "hook": "تخيل أن ذراعيك تستطيعان استكشاف العالم واتخاذ بعض القرارات محليًا!",
+  "seo": {
+    "primaryKeyword": "ذكاء الأخطبوط",
+    "relatedKeywords": [
+      "أذرع الأخطبوط",
+      "دماغ الأخطبوط",
+      "الحياة البحرية",
+      "حقائق علمية"
+    ],
+    "youtubeTitle": "ذكاء الأخطبوط: كيف تعمل أذرعه الثمانية؟ | معلومة في دقيقة #Shorts",
+    "descriptionLead": "الأخطبوط من أذكى الكائنات البحرية، والسر المدهش أن جزءًا كبيرًا من جهازه العصبي موزع في أذرعه.",
+    "hashtags": [
+      "#ذكاء_الأخطبوط",
+      "#علوم",
+      "#معلومات",
+      "#Shorts",
+      "#VYROX"
+    ],
+    "tags": [
+      "ذكاء الأخطبوط",
+      "أذرع الأخطبوط",
+      "دماغ الأخطبوط",
+      "الحياة البحرية",
+      "حقائق علمية",
+      "VYROX",
+      "Shorts"
+    ]
+  },
+  "editorial": {
+    "selectionMethod": "fresh daily editorial selection",
+    "trendDataUsed": false,
+    "note": "Evergreen science explainer; this selection is editorial and is not represented as live trend or search-volume data."
+  },
+  "scenes": [
+    {
+      "narration": "الأخطبوط من أذكى الكائنات البحرية، ويمكنه حل مشكلات والتعلم من التجربة.",
+      "search": "octopus underwater close up",
+      "fallback_search": [
+        "octopus sea animal",
+        "common octopus underwater",
+        "octopus swimming"
+      ]
+    },
+    {
+      "narration": "يمتلك ثمانية أذرع، وتحتوي أذرعه على شبكات عصبية تساعدها على معالجة معلومات اللمس والحركة.",
+      "search": "octopus arms suckers underwater",
+      "fallback_search": [
+        "octopus tentacles",
+        "octopus arms close up",
+        "octopus suckers"
+      ]
+    },
+    {
+      "narration": "تساعده الممصات على الإمساك بالأشياء واستكشاف الأسطح المحيطة به.",
+      "search": "octopus sucker macro",
+      "fallback_search": [
+        "octopus suction cups",
+        "octopus arm close up",
+        "octopus tentacle macro"
+      ]
+    },
+    {
+      "narration": "ويستطيع فتح بعض الأوعية والاختباء وتغيير لون جلده ليتخفى من الأعداء.",
+      "search": "octopus camouflage coral reef",
+      "fallback_search": [
+        "camouflaged octopus",
+        "octopus hiding reef",
+        "octopus changing color"
+      ]
+    },
+    {
+      "narration": "ذكاء الأخطبوط يذكرنا بأن الطبيعة طورت طرقًا مختلفة ومذهلة للتفكير والتكيف.",
+      "search": "octopus swimming coral reef",
+      "fallback_search": [
+        "octopus swimming underwater",
+        "octopus in ocean",
+        "octopus marine life"
+      ]
+    }
+  ]
+}
