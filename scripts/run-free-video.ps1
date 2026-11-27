@@ -7,6 +7,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Force UTF-8 for Arabic output on Windows PowerShell 5.1.
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $worker = Join-Path $PSScriptRoot "free_video_studio.py"
 $requirements = Join-Path $repoRoot "requirements-free-video.txt"
