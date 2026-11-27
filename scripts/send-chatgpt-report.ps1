@@ -38,7 +38,7 @@ function Get-ChatGPTComposer {
         $type = $element.Current.ControlType
         if (($type -eq [System.Windows.Automation.ControlType]::Edit -or
              $type -eq [System.Windows.Automation.ControlType]::Document) -and
-            ($name -match "Message ChatGPT|Send a message|اسأل ChatGPT|إرسال رسالة")) {
+            ($name -match "(?i)Message ChatGPT|Send a message")) {
             return $element
         }
     }
