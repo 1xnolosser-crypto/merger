@@ -127,49 +127,18 @@ if ($LASTEXITCODE -ne 0) {
   throw "Video generation stopped with exit code $LASTEXITCODE."
 }
 
-# Upload the newly rendered final MP4 directly into the ImageKit Media Library.
-# The private key is requested once and stored only in the current Windows user's
-# environment variables by setup-imagekit.ps1; it is never committed to the repo.
+# Keep the rendered MP4 local. No external video hosting or transformation service is used.
 $finalVideo = Get-ChildItem -LiteralPath $OutputDir -Recurse -File |
   Where-Object { $_.Name -match '-(shorts|video)\.mp4$' } |
   Sort-Object LastWriteTime -Descending |
   Select-Object -First 1
 
 if (-not $finalVideo) {
-  throw "Video was rendered but the final MP4 could not be located for ImageKit upload."
+  throw "Video was rendered but the final local MP4 could not be located."
 }
-
-# ImageKit free tier currently limits an individual uploaded file to 100 MB.
-# Stop before upload rather than triggering a paid overage or alternate provider.
-$maxImageKitBytes = 100MB
-if ($finalVideo.Length -gt $maxImageKitBytes) {
-  throw "The rendered video is $([math]::Round($finalVideo.Length / 1MB, 1)) MB; ImageKit free-tier single-file limit is 100 MB. Local video preserved; no paid fallback attempted."
-}
-
-if (-not $env:IMAGEKIT_PRIVATE_KEY) {
-  $setupScript = Join-Path $PSScriptRoot "setup-imagekit.ps1"
-  & $setupScript
-  if (-not $env:IMAGEKIT_PRIVATE_KEY) {
-    $env:IMAGEKIT_PRIVATE_KEY = [Environment]::GetEnvironmentVariable("IMAGEKIT_PRIVATE_KEY", "User")
-  }
-}
-if (-not $env:IMAGEKIT_PRIVATE_KEY) {
-  throw "ImageKit key setup did not complete. The video remains safely in the local output folder."
-}
-
-$imageKitClient = Join-Path $PSScriptRoot "imagekit_media_library.py"
-Write-Host "Uploading final video to the ImageKit Media Library..." -ForegroundColor Cyan
-$uploadJson = & py -3.12 $imageKitClient upload $finalVideo.FullName --folder "/VYROX/Shorts" --tag "VYROX" --tag "Shorts" --tag "Arabic"
-if ($LASTEXITCODE -ne 0) {
-  throw "ImageKit upload failed. The local video was preserved at: $($finalVideo.FullName)"
-}
-$uploadResult = ($uploadJson -join [Environment]::NewLine) | ConvertFrom-Json
-if (-not $uploadResult.url) {
-  throw "ImageKit returned a response without a public file URL. Review the upload response."
-}
-Write-Host "IMAGEKIT UPLOAD SUCCESSFUL" -ForegroundColor Green
-Write-Host ("Media Library URL: " + $uploadResult.url)
-Write-Host ("ImageKit File ID: " + $uploadResult.fileId)
+Write-Host "LOCAL VIDEO READY" -ForegroundColor Green
+Write-Host ("Local MP4: " + $finalVideo.FullName)
+Write-Host ("File size: " + [math]::Round($finalVideo.Length / 1MB, 2) + " MB)
 
 # Build a deterministic SEO/social handoff package only when explicitly requested.
 if ($CreateMetricoolPackage) {
@@ -187,7 +156,7 @@ $attribution = Join-Path $finalVideo.DirectoryName "video-description-and-attrib
 $attributionText = if (Test-Path -LiteralPath $attribution) { Get-Content -LiteralPath $attribution -Raw -Encoding UTF8 } else { "" }
 $package = [ordered]@{
   schemaVersion = 1
-  status = "ready_for_metricool"
+  status = "ready_for_direct_scheduling"
   generatedAt = (Get-Date).ToString("o")
   title = $title
   youtubeTitle = $seoTitle
@@ -199,17 +168,15 @@ $package = [ordered]@{
   relatedKeywords = if ($seo) { @($seo.relatedKeywords) } else { @() }
   topicId = if ($spec.topicId) { [string]$spec.topicId } else { "" }
   editorial = if ($spec.editorial) { $spec.editorial } else { $null }
-  mediaUrl = [string]$uploadResult.url
-  imageKitFileId = [string]$uploadResult.fileId
   localVideoPath = $finalVideo.FullName
   fileSizeBytes = [long]$finalVideo.Length
   attributionFile = $attribution
   platforms = @("youtube_short", "facebook_reel")
-  publication = @{ timezone = "Africa/Cairo"; requiresMetricoolScheduling = $true }
+  publication = @{ timezone = "Africa/Cairo"; requiresDirectPlatformScheduling = $true }
 }
 $packagePath = Join-Path $finalVideo.DirectoryName "metricool-publish-package.json"
 $package | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $packagePath -Encoding UTF8
 Write-Host "PUBLISH PACKAGE CREATED" -ForegroundColor Green
 Write-Host ("Metricool package: " + $packagePath)
-Write-Host "The package contains the public media URL, SEO title, caption, hashtags, tags and image attribution."
+Write-Host "The package contains the local MP4 path, SEO title, caption, hashtags, tags and image attribution."
 }
