@@ -87,8 +87,34 @@ def configure_facebook(page_id: str) -> None:
 def facebook_token() -> str:
     token = load_keyring().get_password(KEYRING_SERVICE, PAGE_TOKEN_USER)
     if not token:
-        raise PublishError("Facebook Page token is not configured. Run: py -3.12 scripts\\publish_social.py configure-facebook")
-    return token
+        raise PublishError("Facebook Page token is not configured. Run configure-facebook from the local VYROX console.")
+    return str(token).strip()
+
+
+def validate_facebook_token(page_id: str) -> None:
+    try:
+        import requests
+    except ImportError:
+        raise PublishError("requests package is missing. Run setup-social-publishing.ps1.") from None
+    token = facebook_token()
+    if not token or any(ch.isspace() for ch in token):
+        raise PublishError("Stored Facebook Page token is empty or contains whitespace; reconfigure it locally.")
+    response = requests.get(
+        f"https://graph.facebook.com/{GRAPH_VERSION}/{page_id}",
+        params={"fields": "id,name", "access_token": token},
+        headers={"Accept": "application/json", "User-Agent": "VYROX-Social-Publisher/1.0"},
+        timeout=30,
+    )
+    try:
+        payload = response.json()
+    except Exception:
+        raise PublishError(f"Facebook token validation returned non-JSON HTTP {response.status_code}.") from None
+    if not response.ok or str(payload.get("id") or "") != str(page_id):
+        error = payload.get("error") or {}
+        code = error.get("code", "unknown")
+        message = str(error.get("message") or "Page token validation failed.")
+        raise PublishError(f"Facebook Page token invalid or unauthorized (HTTP {response.status_code}, code {code}): {message}")
+    print("FACEBOOK_PAGE_TOKEN_VALID: " + str(payload.get("name") or page_id))
 
 
 def authorize_youtube() -> None:
@@ -452,6 +478,8 @@ def main() -> int:
     sub.add_parser("authorize-youtube", help="One-time interactive Google OAuth consent.")
     fb = sub.add_parser("configure-facebook", help="Exchange a user token for a long-lived Page token and store it securely.")
     fb.add_argument("--page-id", default="1574613545729181")
+    fb_validate = sub.add_parser("validate-facebook", help="Validate the stored Page token without uploading.")
+    fb_validate.add_argument("--page-id", default="1574613545729181")
     check = sub.add_parser("check", help="Check that local credentials are present.")
     check.add_argument("--page-id", default="1574613545729181")
     reconcile = sub.add_parser("reconcile-youtube", help="Verify an existing upload without uploading again.")
@@ -470,6 +498,8 @@ def main() -> int:
             authorize_youtube()
         elif args.command == "configure-facebook":
             configure_facebook(args.page_id)
+        elif args.command == "validate-facebook":
+            validate_facebook_token(args.page_id)
         elif args.command == "check":
             check_credentials(args.page_id)
         elif args.command == "reconcile-youtube":
