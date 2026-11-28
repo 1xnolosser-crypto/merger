@@ -427,9 +427,21 @@ if ([BridgeNative.WindowApi]::GetForegroundWindowHandle() -ne $targetWindow.Hand
     throw "CHATGPT_SEND_ABORTED: Could not safely activate the selected ChatGPT window. No text was sent."
 }
 $currentTitle = [BridgeNative.WindowApi]::GetTitle($targetWindow.Handle)
-if ($currentTitle -notmatch "(?i)chatgpt") {
-    throw "CHATGPT_SEND_ABORTED: Active tab title changed and no longer identifies ChatGPT. No text was sent."
+
+# A window caption may be the conversation title, not the website name.
+# Re-read the selected tab's actual address bar after activating the window.
+$verifiedRoot = [System.Windows.Automation.AutomationElement]::FromHandle($targetWindow.Handle)
+if (-not $verifiedRoot) {
+    throw "CHATGPT_SEND_ABORTED: The active Edge accessibility tree is unavailable. No text was sent."
 }
+$activeAddress = Get-EdgeAddressBarUrl -Root $verifiedRoot
+$activeUri = $null
+if ([string]::IsNullOrWhiteSpace($activeAddress) -or
+    -not [Uri]::TryCreate($activeAddress, [UriKind]::Absolute, [ref]$activeUri) -or
+    ($activeUri.Host -ne "chatgpt.com" -and -not $activeUri.Host.EndsWith(".chatgpt.com"))) {
+    throw "CHATGPT_SEND_ABORTED: The active tab URL could not be verified as chatgpt.com. No text was sent."
+}
+$target = $verifiedRoot
 $targetComposer = Get-ChatGPTComposer -Root $target
 if (-not $targetComposer) {
     throw "CHATGPT_SEND_ABORTED: ChatGPT tab was selected, but its composer is no longer accessible. No text was sent."
