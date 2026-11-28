@@ -5,6 +5,7 @@ on:
     branches:
       - feat/free-offline-video-pipeline
       - feat/free-hybrid-video-studio
+      - fix/vyrox-safe-daily
   pull_request:
     branches:
       - feat/free-hybrid-video-studio
@@ -25,10 +26,36 @@ jobs:
           python-version: "3.12"
 
       - name: Compile Python scripts
-        run: python -m py_compile scripts/free_video_studio.py tests/test_free_video_studio.py
+        run: python -m py_compile scripts/free_video_studio.py scripts/topic_seo_planner.py tests/test_free_video_studio.py tests/test_topic_seo_planner.py
 
       - name: Validate sample video specification
         run: python -m json.tool examples/free-video-project.json > /dev/null
 
       - name: Run free-studio unit tests
-        run: python -m unittest discover -s tests -p "test_free_video_studio.py" -v
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+  windows-powershell-validation:
+    runs-on: windows-2022
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Parse VYROX runners with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $paths = @(
+            (Join-Path $env:GITHUB_WORKSPACE "scripts/run-free-video.ps1"),
+            (Join-Path $env:GITHUB_WORKSPACE "scripts/run-free-video-worker.ps1")
+          )
+          foreach ($path in $paths) {
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Required runner script is missing: $path"
+            }
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.ToString() }
+              exit 1
+            }
+            Write-Host "PowerShell syntax passed: $path"
+          }

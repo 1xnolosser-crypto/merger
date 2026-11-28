@@ -1,0 +1,40 @@
+name: Windows PowerShell 5.1 validation
+
+on:
+  pull_request:
+    branches:
+      - feat/free-hybrid-video-studio
+  push:
+    branches:
+      - fix/vyrox-safe-daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parse-vyrox-runners:
+    runs-on: windows-2022
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Parse VYROX PowerShell scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $paths = @(
+            (Join-Path $env:GITHUB_WORKSPACE "scripts/run-free-video.ps1"),
+            (Join-Path $env:GITHUB_WORKSPACE "scripts/run-free-video-worker.ps1")
+          )
+          foreach ($path in $paths) {
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Required runner script is missing: $path"
+            }
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.ToString() }
+              exit 1
+            }
+            Write-Host "PowerShell syntax passed: $path"
+          }
