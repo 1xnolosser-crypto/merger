@@ -50,6 +50,9 @@ namespace BridgeNative {
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
         private static extern bool ShowWindowAsync(IntPtr hWnd, int command);
 
         public static string GetTitle(IntPtr hWnd) {
@@ -61,6 +64,10 @@ namespace BridgeNative {
         public static bool Activate(IntPtr hWnd) {
             ShowWindowAsync(hWnd, 9);
             return SetForegroundWindow(hWnd);
+        }
+
+        public static IntPtr GetForegroundWindowHandle() {
+            return GetForegroundWindow();
         }
 
         public static EdgeWindow[] GetEdgeWindows() {
@@ -121,6 +128,9 @@ $targetComposer = $null
 foreach ($window in $windows) {
     [void][BridgeNative.WindowApi]::Activate($window.Handle)
     Start-Sleep -Milliseconds 350
+    if ([BridgeNative.WindowApi]::GetForegroundWindowHandle() -ne $window.Handle) {
+        continue
+    }
 
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($window.Handle)
     if (-not $root) { continue }
@@ -166,6 +176,9 @@ if (-not $target) {
 
 [void][BridgeNative.WindowApi]::Activate($targetWindow.Handle)
 Start-Sleep -Milliseconds 500
+if ([BridgeNative.WindowApi]::GetForegroundWindowHandle() -ne $targetWindow.Handle) {
+    throw "CHATGPT_SEND_ABORTED: Could not safely activate the selected ChatGPT window. No text was sent."
+}
 $targetComposer = Get-ChatGPTComposer -Root $target
 if (-not $targetComposer) {
     throw "CHATGPT_SEND_ABORTED: ChatGPT tab was selected, but its composer is no longer accessible. No text was sent."
