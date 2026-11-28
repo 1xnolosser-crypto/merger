@@ -183,7 +183,14 @@ function Select-EdgeTab {
         if (-not $pattern.Current.IsSelected) { $pattern.Select() }
         Start-Sleep -Milliseconds 500
         return $true
-    } catch { return $false }
+    } catch {
+        try {
+            $invoke = $Tab.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+            $invoke.Invoke()
+            Start-Sleep -Milliseconds 500
+            return $true
+        } catch { return $false }
+    }
 }
 
 $windows = @([BridgeNative.WindowApi]::GetEdgeWindows())
@@ -254,9 +261,6 @@ if (-not $target) {
         [void][BridgeNative.WindowApi]::Activate($originalForeground)
     }
     throw "CHATGPT_SEND_ABORTED: No already-open ChatGPT tab with an accessible composer was found. No tab or window was created; no text was sent."
-}
-if (-not $target) {
-    throw "CHATGPT_SEND_ABORTED: No active Edge tab with a ChatGPT title and accessible message composer was found. No text was sent."
 }
 
 [void][BridgeNative.WindowApi]::Activate($targetWindow.Handle)
