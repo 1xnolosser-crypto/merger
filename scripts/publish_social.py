@@ -23,6 +23,10 @@ YOUTUBE_TOKEN = SECRETS / "youtube-token.json"
 KEYRING_SERVICE = "VYROX-Social-Publisher"
 PAGE_TOKEN_USER = "facebook-page-access-token"
 GRAPH_VERSION = "v27.0"
+YOUTUBE_SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+]
 
 
 class PublishError(RuntimeError):
@@ -99,7 +103,7 @@ def authorize_youtube() -> None:
         )
     SECRETS.mkdir(parents=True, exist_ok=True)
     flow = InstalledAppFlow.from_client_secrets_file(
-        str(YOUTUBE_CLIENT), ["https://www.googleapis.com/auth/youtube.upload"]
+        str(YOUTUBE_CLIENT), YOUTUBE_SCOPES
     )
     credentials = flow.run_local_server(
         host="127.0.0.1", port=0, open_browser=True,
@@ -123,11 +127,13 @@ def youtube_service():
     if not YOUTUBE_TOKEN.is_file():
         raise PublishError("YouTube is not authorized yet. Run: py -3.12 scripts\\publish_social.py authorize-youtube")
     creds = Credentials.from_authorized_user_file(
-        str(YOUTUBE_TOKEN), ["https://www.googleapis.com/auth/youtube.upload"]
+        str(YOUTUBE_TOKEN), YOUTUBE_SCOPES
     )
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
         YOUTUBE_TOKEN.write_text(creds.to_json(), encoding="utf-8")
+    if not creds.has_scopes(YOUTUBE_SCOPES):
+        raise PublishError("YouTube OAuth token needs youtube.upload and youtube.readonly. Run authorize-youtube again; do not re-upload the existing video.")
     if not creds.valid:
         raise PublishError("YouTube OAuth token is invalid. Run authorize-youtube again.")
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
@@ -252,9 +258,22 @@ def publish_facebook(package: dict[str, Any], video_path: Path, page_id: str, pu
         raise PublishError("requests package is missing. Run setup-social-publishing.ps1.") from None
     token = facebook_token()
     base = f"https://graph.facebook.com/{GRAPH_VERSION}/{page_id}/video_reels"
-    start = requests.post(base, data={"upload_phase": "START"}, headers={"Authorization": f"OAuth {token}"}, timeout=60)
+    api_headers = {"Accept": "application/json", "User-Agent": "VYROX-Social-Publisher/1.0"}
+    start = requests.post(
+        base, params={"access_token": token}, data={"upload_phase": "START"},
+        headers=api_headers, timeout=60,
+    )
     if not start.ok:
-        raise PublishError(f"Facebook START failed HTTP {start.status_code}: {start.text[:1000]}")
+        try:
+            error_body = start.json()
+            error_text = json.dumps(error_body, ensure_ascii=False)[:1400]
+        except Exception:
+            trace = start.headers.get("x-fb-trace-id") or start.headers.get("x-fb-request-id") or "unavailable"
+            error_text = (
+                f"non-JSON response; content-type={start.headers.get('content-type', 'unknown')}; "
+                f"fb-trace-id={trace}; body={start.text[:500]!r}"
+            )
+        raise PublishError(f"Facebook START failed HTTP {start.status_code}: {error_text}")
     start_data = start.json()
     video_id = str(start_data.get("video_id") or "")
     upload_url = str(start_data.get("upload_url") or "")
@@ -287,13 +306,103 @@ def publish_facebook(package: dict[str, Any], video_path: Path, page_id: str, pu
         "description": str(package["description"])[:5000],
         "is_ai_generated": "true",
     }
-    finish = requests.post(base, data=finish_data, headers={"Authorization": f"OAuth {token}"}, timeout=120)
+    finish = requests.post(
+        base, params={"access_token": token}, data=finish_data,
+        headers=api_headers, timeout=120,
+    )
     if not finish.ok:
         raise PublishError(f"Facebook FINISH failed HTTP {finish.status_code}: {finish.text[:1200]}")
     result = finish.json()
     if result.get("success") is not True or str(result.get("video_id") or video_id) != video_id:
         raise PublishError(f"Facebook did not confirm the scheduled Reel: {result}")
     return f"https://www.facebook.com/reel/{video_id}"
+
+
+def reconcile_youtube_upload(package_path: Path, video_id: str, publish_at_text: str) -> str:
+    """Verify an already-uploaded YouTube video without uploading it again."""
+    publish_at = parse_publish_at(publish_at_text)
+    package = load_package(package_path)
+    state_file = state_path(package_path)
+    state = read_state(state_file)
+    state.setdefault("platforms", {})
+    youtube = youtube_service()
+    deadline = time.time() + 600
+    last_status: dict[str, Any] = {}
+    while time.time() < deadline:
+        response = youtube.videos().list(
+            part="status,processingDetails,snippet", id=video_id
+        ).execute()
+        items = response.get("items") or []
+        if not items:
+            raise PublishError(
+                f"YouTube video ID {video_id} was not found in the authorized channel. "
+                "The uploaded file was not re-sent."
+            )
+        item = items[0]
+        status = item.get("status") or {}
+        processing = (item.get("processingDetails") or {}).get("processingStatus")
+        last_status = {
+            "uploadStatus": status.get("uploadStatus"),
+            "processingStatus": processing,
+            "privacyStatus": status.get("privacyStatus"),
+            "publishAt": status.get("publishAt"),
+        }
+        actual_publish_at = status.get("publishAt")
+        expected_publish_at = publish_at.astimezone(timezone.utc).replace(microsecond=0)
+        publish_at_matches = False
+        if actual_publish_at:
+            try:
+                actual = datetime.fromisoformat(str(actual_publish_at).replace("Z", "+00:00"))
+                publish_at_matches = actual.astimezone(timezone.utc).replace(microsecond=0) == expected_publish_at
+            except ValueError:
+                publish_at_matches = False
+        if status.get("uploadStatus") in {"rejected", "failed", "deleted"}:
+            raise PublishError(
+                f"YouTube reports this existing upload as {status.get('uploadStatus')}. "
+                "No duplicate upload was attempted."
+            )
+        if (
+            (status.get("uploadStatus") == "processed" or processing == "succeeded")
+            and status.get("privacyStatus") == "private"
+            and publish_at_matches
+        ):
+            url = "https://www.youtube.com/shorts/" + video_id
+            state["platforms"]["youtube"] = {
+                "scheduled": True,
+                "success": False,
+                "url": url,
+                "videoId": video_id,
+                "scheduledAt": publish_at.isoformat(),
+                "verifiedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+            state["status"] = "partial"
+            state["scheduledAt"] = publish_at.isoformat()
+            state["updatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            write_state(state_file, state)
+            print("YOUTUBE_EXISTING_UPLOAD_RECONCILED")
+            print("YOUTUBE_SCHEDULED: " + url)
+            print("YOUTUBE_VIDEO_ID: " + video_id)
+            return url
+        # Persist the upload identifier and last observed state before waiting.
+        state["platforms"]["youtube"] = {
+            "scheduled": False,
+            "success": False,
+            "uploaded": True,
+            "uploadId": video_id,
+            "url": "https://www.youtube.com/shorts/" + video_id,
+            "lastObservedStatus": last_status,
+            "scheduledAtRequested": publish_at.isoformat(),
+        }
+        state["status"] = "partial"
+        state["updatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        write_state(state_file, state)
+        print("YOUTUBE_EXISTING_UPLOAD_PENDING: " + json.dumps(last_status, ensure_ascii=False))
+        time.sleep(20)
+    raise PublishError(
+        "Existing YouTube upload was not yet confirmed scheduled within 10 minutes. "
+        "Its video ID was saved; do not upload it again. Last state: " +
+        json.dumps(last_status, ensure_ascii=False)
+    )
 
 
 def check_credentials(page_id: str) -> None:
@@ -322,6 +431,10 @@ def main() -> int:
     fb.add_argument("--page-id", default="1574613545729181")
     check = sub.add_parser("check", help="Check that local credentials are present.")
     check.add_argument("--page-id", default="1574613545729181")
+    reconcile = sub.add_parser("reconcile-youtube", help="Verify an existing upload without uploading again.")
+    reconcile.add_argument("--package", required=True)
+    reconcile.add_argument("--video-id", required=True)
+    reconcile.add_argument("--publish-at", required=True)
     pub = sub.add_parser("publish", help="Upload and schedule a prepared local package.")
     pub.add_argument("--package", required=True)
     pub.add_argument("--page-id", default="1574613545729181")
@@ -335,6 +448,8 @@ def main() -> int:
             configure_facebook(args.page_id)
         elif args.command == "check":
             check_credentials(args.page_id)
+        elif args.command == "reconcile-youtube":
+            reconcile_youtube_upload(Path(args.package).expanduser().resolve(), args.video_id, args.publish_at)
         else:
             publish_at = parse_publish_at(args.publish_at)
             package_path = Path(args.package).expanduser().resolve()
