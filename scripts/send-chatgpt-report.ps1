@@ -1,150 +1,224 @@
 # Sends a report only to an existing ChatGPT tab in Microsoft Edge.
-# It searches every Edge window and its accessible tab items before sending.
+# It cycles active tabs and identifies ChatGPT by its unique composer AutomationId.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$Report,
-    [int]$WaitSeconds = 25
+    [int]$WaitSeconds = 25,
+    [int]$MaxTabsPerWindow = 20
 )
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
-function Get-ChatGPTTarget {
-    param([IntPtr]$WindowHandle)
+if (-not ("BridgeNative.WindowApi" -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
 
-    $root = [System.Windows.Automation.AutomationElement]::FromHandle($WindowHandle)
-    if (-not $root) { return $null }
-
-    $title = [string]$root.Current.Name
-    if ($title -match "(?i)ChatGPT|chat\.openai\.com") {
-        return [pscustomobject]@{ Root = $root; TabName = $title }
+namespace BridgeNative {
+    public sealed class EdgeWindow {
+        public IntPtr Handle { get; set; }
+        public int ProcessId { get; set; }
+        public string Title { get; set; }
     }
 
-    # The active tab title may not be ChatGPT. Search the browser's accessible tab strip.
-    $all = $root.FindAll(
-        [System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.Condition]::TrueCondition
-    )
-    foreach ($element in $all) {
-        if ($element.Current.ControlType -ne [System.Windows.Automation.ControlType]::TabItem) {
-            continue
+    public static class WindowApi {
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr extraData);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder text, int maxCount);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindowAsync(IntPtr hWnd, int command);
+
+        public static string GetTitle(IntPtr hWnd) {
+            StringBuilder value = new StringBuilder(1024);
+            GetWindowText(hWnd, value, value.Capacity);
+            return value.ToString();
         }
-        $tabName = [string]$element.Current.Name
-        if ($tabName -match "(?i)ChatGPT|chat\.openai\.com") {
-            try {
-                $selection = $element.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-                $selection.Select()
-            } catch {
+
+        public static bool Activate(IntPtr hWnd) {
+            ShowWindowAsync(hWnd, 9);
+            return SetForegroundWindow(hWnd);
+        }
+
+        public static EdgeWindow[] GetEdgeWindows() {
+            List<EdgeWindow> found = new List<EdgeWindow>();
+            EnumWindowsProc callback = delegate(IntPtr hWnd, IntPtr extra) {
+                if (!IsWindowVisible(hWnd)) return true;
+                StringBuilder className = new StringBuilder(256);
+                GetClassName(hWnd, className, className.Capacity);
+                if (className.ToString() != "Chrome_WidgetWin_1") return true;
+
+                uint processId;
+                GetWindowThreadProcessId(hWnd, out processId);
                 try {
-                    $invoke = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                    $invoke.Invoke()
+                    using (Process process = Process.GetProcessById((int)processId)) {
+                        if (process.ProcessName.Equals("msedge", StringComparison.OrdinalIgnoreCase)) {
+                            found.Add(new EdgeWindow {
+                                Handle = hWnd,
+                                ProcessId = (int)processId,
+                                Title = GetTitle(hWnd)
+                            });
+                        }
+                    }
                 } catch {}
-            }
-            Start-Sleep -Milliseconds 700
-            return [pscustomobject]@{ Root = $root; TabName = $tabName }
+                return true;
+            };
+            EnumWindows(callback, IntPtr.Zero);
+            return found.ToArray();
         }
     }
-    return $null
+}
+"@
 }
 
 function Get-ChatGPTComposer {
-    param($Root)
+    param([System.Windows.Automation.AutomationElement]$Root)
 
+    if (-not $Root) { return $null }
     $condition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
         "prompt-textarea"
     )
-    $found = $Root.FindFirst(
+    return $Root.FindFirst(
         [System.Windows.Automation.TreeScope]::Descendants,
         $condition
     )
-    if ($found) { return $found }
-
-    $all = $Root.FindAll(
-        [System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.Condition]::TrueCondition
-    )
-    foreach ($element in $all) {
-        $name = [string]$element.Current.Name
-        $type = $element.Current.ControlType
-        if (($type -eq [System.Windows.Automation.ControlType]::Edit -or
-             $type -eq [System.Windows.Automation.ControlType]::Document) -and
-            ($name -match "(?i)Message ChatGPT|Send a message")) {
-            return $element
-        }
-    }
-    return $null
 }
 
-$windows = @(Get-Process msedge -ErrorAction SilentlyContinue |
-    Where-Object { $_.MainWindowHandle -ne 0 } |
-    Sort-Object StartTime -Descending)
-
+$windows = @([BridgeNative.WindowApi]::GetEdgeWindows())
 if ($windows.Count -eq 0) {
-    throw "CHATGPT_SEND_ABORTED: Microsoft Edge has no accessible browser window."
-}
-
-$target = $null
-$targetProcess = $null
-foreach ($edge in $windows) {
-    $candidate = Get-ChatGPTTarget -WindowHandle ([IntPtr]$edge.MainWindowHandle)
-    if ($candidate) {
-        $target = $candidate
-        $targetProcess = $edge
-        break
-    }
-}
-if (-not $target) {
-    throw "CHATGPT_SEND_ABORTED: No existing ChatGPT tab was found in any accessible Edge window. No text was sent."
+    throw "CHATGPT_SEND_ABORTED: No visible Microsoft Edge browser window was found."
 }
 
 $ws = New-Object -ComObject WScript.Shell
-if (-not $ws.AppActivate([int]$targetProcess.Id)) {
-    throw "CHATGPT_SEND_ABORTED: Could not activate the Edge window containing ChatGPT."
+$target = $null
+$targetWindow = $null
+$targetComposer = $null
+
+foreach ($window in $windows) {
+    [void][BridgeNative.WindowApi]::Activate($window.Handle)
+    Start-Sleep -Milliseconds 350
+
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($window.Handle)
+    if (-not $root) { continue }
+
+    # Inspect the currently active tab, then cycle through tabs using Edge's
+    # keyboard navigation. This avoids relying on Chromium's often-hidden
+    # UI Automation TabItem tree.
+    $composer = Get-ChatGPTComposer -Root $root
+    if ($composer) {
+        $target = $root
+        $targetWindow = $window
+        $targetComposer = $composer
+        break
+    }
+
+    $stepsTaken = 0
+    for ($step = 0; $step -lt $MaxTabsPerWindow; $step++) {
+        $ws.SendKeys("^{TAB}")
+        $stepsTaken++
+        Start-Sleep -Milliseconds 250
+
+        $composer = Get-ChatGPTComposer -Root $root
+        if ($composer) {
+            $target = $root
+            $targetWindow = $window
+            $targetComposer = $composer
+            break
+        }
+    }
+
+    if ($target) { break }
+
+    # Restore the original tab before inspecting another Edge window.
+    for ($restore = 0; $restore -lt $stepsTaken; $restore++) {
+        $ws.SendKeys("^+{TAB}")
+        Start-Sleep -Milliseconds 35
+    }
 }
-Start-Sleep -Milliseconds 700
 
-$composer = $null
-$deadline = (Get-Date).AddSeconds([Math]::Max(1, $WaitSeconds))
-do {
-    $composer = Get-ChatGPTComposer -Root $target.Root
-    if ($composer) { break }
-    Start-Sleep -Milliseconds 500
-} while ((Get-Date) -lt $deadline)
+if (-not $target) {
+    throw "CHATGPT_SEND_ABORTED: No ChatGPT composer was found after inspecting active tabs in all visible Edge windows. No text was sent."
+}
 
-if (-not $composer) {
-    throw "CHATGPT_SEND_ABORTED: ChatGPT tab was identified, but its message composer was not accessible. No text was sent."
+[void][BridgeNative.WindowApi]::Activate($targetWindow.Handle)
+Start-Sleep -Milliseconds 500
+$targetComposer = Get-ChatGPTComposer -Root $target
+if (-not $targetComposer) {
+    throw "CHATGPT_SEND_ABORTED: ChatGPT tab was selected, but its composer is no longer accessible. No text was sent."
 }
 
 $oldClipboard = $null
-try { $oldClipboard = Get-Clipboard -Raw -ErrorAction SilentlyContinue } catch {}
-Set-Clipboard -Value $Report
+$clipboardCaptured = $false
 try {
-    $composer.SetFocus()
+    $oldClipboard = Get-Clipboard -Raw -ErrorAction Stop
+    $clipboardCaptured = $true
+} catch {}
+
+try {
+    Set-Clipboard -Value $Report
+    $targetComposer.SetFocus()
     Start-Sleep -Milliseconds 250
     $ws.SendKeys("^v")
-    Start-Sleep -Milliseconds 600
+    Start-Sleep -Milliseconds 700
 
-    # If ValuePattern is available, verify the pasted report before submitting.
-    $value = $null
+    $pastedValue = $null
     try {
-        $pattern = $composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        $value = [string]$pattern.Current.Value
+        $valuePattern = $targetComposer.GetCurrentPattern(
+            [System.Windows.Automation.ValuePattern]::Pattern
+        )
+        $pastedValue = [string]$valuePattern.Current.Value
     } catch {}
-    if ($value -and -not $value.Contains($Report.Substring(0, [Math]::Min(40, $Report.Length)))) {
+
+    if ($null -ne $pastedValue -and
+        -not $pastedValue.Contains($Report.Substring(0, [Math]::Min(40, $Report.Length)))) {
         throw "CHATGPT_SEND_ABORTED: Composer verification failed. Enter was not pressed."
     }
 
     $ws.SendKeys("{ENTER}")
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 3
+
+    $remainingValue = $null
+    try {
+        $valuePattern = $targetComposer.GetCurrentPattern(
+            [System.Windows.Automation.ValuePattern]::Pattern
+        )
+        $remainingValue = [string]$valuePattern.Current.Value
+    } catch {}
+
+    if ($null -ne $remainingValue -and $remainingValue.Contains($Report.Substring(0, [Math]::Min(40, $Report.Length)))) {
+        throw "CHATGPT_SEND_ABORTED: The report remains in the composer; submission was not confirmed."
+    }
+
     "CHATGPT_MESSAGE_SUBMITTED"
-    "Destination: ChatGPT tab '$($target.TabName)' in Microsoft Edge"
+    "Destination: existing ChatGPT composer in Microsoft Edge"
+    "Window: $($targetWindow.Title)"
     "Characters: $($Report.Length)"
 } finally {
-    if ($null -ne $oldClipboard) {
+    if ($clipboardCaptured) {
         Set-Clipboard -Value $oldClipboard
     }
 }
