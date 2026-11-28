@@ -148,7 +148,8 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     # Preserve an auditable human-readable concept file next to every generated spec.
-    concept_path = out.with_name(out.stem + "-concept.txt")
+    concept_stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    concept_path = out.with_name(f"{chosen['id']}-{concept_stamp}-concept.txt")
     concept_lines = [
         "VYROX VIDEO CONCEPT",
         f"Topic ID: {chosen['id']}",
