@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# VYROX_TOPIC_PLANNER_VERSION: direct-local-scheduling-2026-11-28-1
 """Free Arabic Shorts topic planner. Uses a local editorial catalogue; no paid APIs."""
 from __future__ import annotations
 
@@ -10,6 +11,18 @@ from pathlib import Path
 from typing import Any
 
 CATALOG: list[dict[str, Any]] = [
+    {
+        "id": "hummingbird-hover", "category": "science", "title": "الطائر الطنان: كيف يثبت في الهواء مثل المروحية؟",
+        "hook": "كيف يستطيع طائر صغير أن يبقى ثابتًا في الهواء أمام زهرة؟",
+        "keyword": "كيف يطير الطائر الطنان", "related": ["تحويم الطيور", "رفرفة الأجنحة", "الطيور الطنانة"],
+        "scenes": [
+            ("يستطيع الطائر الطنان التحويم أمام الزهرة مع الحفاظ على موضعه تقريبًا.", "hummingbird hovering in front of flower", ["hummingbird hovering", "hummingbird flight near flowers"]),
+            ("تتحرك أجنحته بسرعة كبيرة إلى الأمام والخلف، فتنتج قوة رفع خلال الاتجاهين.", "hummingbird wings slow motion flight", ["hummingbird wing movement", "hummingbird hovering slow motion"]),
+            ("تأخذ حركة جناحيه مسارًا يشبه الرقم ثمانية، ما يساعده على التحكم في التحويم.", "hummingbird flight figure eight wings", ["hummingbird wing motion close up"]),
+            ("يمكنه التوقف وتغيير اتجاهه بسرعة كبيرة قرب الأزهار.", "hummingbird agile flight near flower", ["hummingbird flying sideways", "hummingbird hovering flower"]),
+            ("وأثناء تحليقه، يستخدم منقاره ولسانه للوصول إلى رحيق الزهرة.", "hummingbird feeding nectar close up", ["hummingbird feeding flower close up"])
+        ]
+    },
     {
         "id": "water-cycle", "category": "science", "title": "رحلة قطرة ماء: كيف تعود الأمطار إلى الأرض؟",
         "hook": "هل تعلم أن قطرة الماء التي تشربها قد تكون سافرت عبر السماء آلاف المرات؟",
