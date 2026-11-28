@@ -37,7 +37,7 @@ try {
     $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
     $runnerText = $strictUtf8.GetString($bytes)
     if ($runnerText -match '[^\x00-\x7F]') { throw "Worker source is not ASCII-only." }
-    if ($runnerText -notmatch 'IMAGEKIT UPLOAD SUCCESSFUL' -or
+    if ($runnerText -notmatch 'LOCAL VIDEO READY' -or
         $runnerText -notmatch 'PYTHONIOENCODING' -or
         $runnerText -notmatch 'CreateMetricoolPackage' -or
         $runnerText -notmatch 'TopicHistoryPath') {
@@ -107,16 +107,16 @@ try {
         $packageConfirmed = (-not $CreateMetricoolPackage) -or
             ($combined -match 'PUBLISH PACKAGE CREATED' -and $combined -match 'metricool-publish-package.json')
 
-        if ($lastCode -eq 0 -and $combined -match 'IMAGEKIT UPLOAD SUCCESSFUL' -and $packageConfirmed) {
-            Write-Host "VYROX_VIDEO_RENDER_IMAGEKIT_UPLOAD_AND_HANDOFF_CONFIRMED"
+        if ($lastCode -eq 0 -and $combined -match 'LOCAL VIDEO READY' -and $packageConfirmed) {
+            Write-Host "VYROX_LOCAL_VIDEO_RENDER_AND_HANDOFF_CONFIRMED"
             Write-Host ("LOCAL_LOG: " + $stdout)
             $global:LASTEXITCODE = 0
             return
         }
 
-        # Never retry after a successful upload marker: doing so could create duplicate assets.
+        # Never retry after a successful local render marker: doing so could create duplicate video renders.
         if ($combined -match 'IMAGEKIT UPLOAD SUCCESSFUL') {
-            throw "Upload succeeded but the worker did not confirm every requested output. No duplicate retry was attempted."
+            throw "Local video render succeeded but the worker did not confirm every requested output. No duplicate retry was attempted."
         }
         if ($attempt -lt $MaxAttempts) {
             Write-Warning ("Attempt {0} failed with exit code {1}; one bounded retry will run." -f $attempt, $lastCode)
