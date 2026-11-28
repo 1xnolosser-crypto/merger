@@ -4,6 +4,7 @@ param(
   [string]$OutputDir = (Join-Path $PSScriptRoot "..\media-output"),
   [switch]$AutoTopic,
   [ValidateSet("any", "science", "technology")][string]$TopicCategory = "any",
+  [string]$TopicHistoryPath = (Join-Path $PSScriptRoot "..\\topic-history.txt"),
   [switch]$CreateMetricoolPackage
 )
 
@@ -40,7 +41,8 @@ if ($AutoTopic) {
   $planner = Join-Path $PSScriptRoot "topic_seo_planner.py"
   $SpecPath = Join-Path $OutputDir "auto-topic-project.json"
   Write-Host "Selecting a fresh Arabic Shorts topic and preparing SEO metadata..." -ForegroundColor Cyan
-  & py -3.12 $planner --output $SpecPath --category $TopicCategory
+  $TopicHistoryPath = [IO.Path]::GetFullPath($TopicHistoryPath)
+  & py -3.12 $planner --output $SpecPath --category $TopicCategory --history $TopicHistoryPath
   if ($LASTEXITCODE -ne 0) {
     throw "Automatic topic selection failed. No video generation was started."
   }
