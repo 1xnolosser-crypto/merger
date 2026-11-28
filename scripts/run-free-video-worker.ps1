@@ -42,8 +42,14 @@ if ($AutoTopic) {
   # Self-heal an incomplete local installation by restoring the planner from
   # the same pinned project branch. Validate UTF-8 and required CLI markers
   # before replacing/creating the local file; never overwrite a valid planner.
-  if (-not (Test-Path -LiteralPath $planner)) {
-    $plannerUrl = "https://raw.githubusercontent.com/1xnolosser-crypto/merger/feat/free-hybrid-video-studio/scripts/topic_seo_planner.py"
+  $plannerVersion = "direct-local-scheduling-2026-11-28-1"
+  $plannerNeedsRefresh = -not (Test-Path -LiteralPath $planner)
+  if (-not $plannerNeedsRefresh) {
+    $existingPlannerText = Get-Content -LiteralPath $planner -Raw -Encoding UTF8
+    $plannerNeedsRefresh = -not $existingPlannerText.Contains($plannerVersion)
+  }
+  if ($plannerNeedsRefresh) {
+    $plannerUrl = "https://raw.githubusercontent.com/1xnolosser-crypto/merger/feat/vyrox-direct-local-scheduling/scripts/topic_seo_planner.py"
     $plannerTemp = $planner + ".download"
     try {
       Invoke-WebRequest -Uri $plannerUrl -OutFile $plannerTemp -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" }
@@ -53,13 +59,20 @@ if ($AutoTopic) {
       $plannerBytes = [IO.File]::ReadAllBytes($plannerTemp)
       $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
       $plannerText = $strictUtf8.GetString($plannerBytes)
-      if ($plannerText -notmatch 'CATALOG' -or $plannerText -notmatch 'topic-history.txt' -or $plannerText -notmatch 'selectedTopic') {
-        throw "Downloaded topic planner failed content validation."
+      if ($plannerText -notmatch 'CATALOG' -or $plannerText -notmatch 'topic-history.txt' -or
+          $plannerText -notmatch 'selectedTopic' -or -not $plannerText.Contains($plannerVersion) -or
+          $plannerText -notmatch 'hummingbird-hover') {
+        throw "Downloaded topic planner failed version, topic, or content validation."
       }
       $null = & py -3.12 -m py_compile $plannerTemp 2>&1
       if ($LASTEXITCODE -ne 0) { throw "Downloaded topic planner failed Python syntax validation." }
+      if (Test-Path -LiteralPath $planner) {
+        $plannerBackup = $planner + ".backup-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+        Copy-Item -LiteralPath $planner -Destination $plannerBackup -Force
+        Write-Host ("Previous topic planner backup: " + $plannerBackup)
+      }
       Move-Item -LiteralPath $plannerTemp -Destination $planner -Force
-      Write-Host "Restored missing topic SEO planner from the project repository." -ForegroundColor Green
+      Write-Host "Installed the validated current topic SEO planner." -ForegroundColor Green
     } finally {
       Remove-Item -LiteralPath $plannerTemp -Force -ErrorAction SilentlyContinue
     }
