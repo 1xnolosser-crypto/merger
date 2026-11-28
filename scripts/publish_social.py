@@ -346,16 +346,32 @@ def main() -> int:
             requested = [x.strip().lower() for x in args.platforms.split(",") if x.strip()]
             if not requested or any(p not in {"youtube", "facebook"} for p in requested):
                 raise PublishError("Platforms must be a comma-separated subset of youtube,facebook.")
+            platform_errors: dict[str, str] = {}
             for platform in requested:
                 previous = state["platforms"].get(platform, {})
                 if previous.get("success") or previous.get("scheduled"):
                     print(platform.upper() + "_ALREADY_HANDLED: " + str(previous.get("url", "")))
                     continue
                 print("Scheduling " + platform + " directly from the local MP4...")
-                if platform == "youtube":
-                    url = publish_youtube(package, video_path, publish_at)
-                else:
-                    url = publish_facebook(package, video_path, args.page_id, publish_at)
+                try:
+                    if platform == "youtube":
+                        url = publish_youtube(package, video_path, publish_at)
+                    else:
+                        url = publish_facebook(package, video_path, args.page_id, publish_at)
+                except Exception as exc:
+                    message = str(exc).strip() or exc.__class__.__name__
+                    platform_errors[platform] = message
+                    state["platforms"][platform] = {
+                        "scheduled": False,
+                        "success": False,
+                        "error": message[:2000],
+                        "attemptedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    }
+                    write_state(state_file, state)
+                    print(platform.upper() + "_SCHEDULING_FAILED: " + message, file=sys.stderr)
+                    # Continue to the other platform. A later retry skips any platform
+                    # already confirmed scheduled and retries only failed/incomplete ones.
+                    continue
                 state["platforms"][platform] = {
                     "scheduled": True,
                     "success": False,
@@ -374,7 +390,12 @@ def main() -> int:
             state["updatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             write_state(state_file, state)
             if not complete:
-                raise PublishError("One or more requested platforms did not confirm scheduling.")
+                error_summary = "; ".join(
+                    platform.upper() + ": " + message for platform, message in platform_errors.items()
+                )
+                if not error_summary:
+                    error_summary = "One or more requested platforms did not confirm scheduling."
+                raise PublishError(error_summary)
             print("ALL_REQUESTED_PLATFORMS_SCHEDULED")
         return 0
     except PublishError as exc:
