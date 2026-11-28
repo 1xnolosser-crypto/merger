@@ -190,7 +190,7 @@ try {
     $sendButton=$null
     try {
         $buttons=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-            (New-Object System.Windows.Automation.PropertyCondition(
+            ([System.Windows.Automation.PropertyCondition]::new(
                 [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
                 [System.Windows.Automation.ControlType]::Button)))
         foreach($button in $buttons) {
