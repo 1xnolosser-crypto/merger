@@ -87,27 +87,38 @@ CATALOG: list[dict[str, Any]] = [
 def main() -> int:
     parser = argparse.ArgumentParser(description="Choose a fresh Arabic Shorts topic and write a video spec.")
     parser.add_argument("--output", required=True, help="Destination JSON project spec.")
-    parser.add_argument("--history", default="", help="Optional local JSON topic history.")
+    parser.add_argument("--history", default="", help="Persistent plain-text topic history file (shared across runs).")
     parser.add_argument("--category", choices=["any", "science", "technology"], default="any")
     args = parser.parse_args()
 
-    history_path = Path(args.history).expanduser() if args.history else Path(args.output).expanduser().parent / "topic-history.json"
+    history_path = Path(args.history).expanduser() if args.history else Path(args.output).expanduser().parent / "topic-history.txt"
     used: dict[str, int] = {}
+    history_lines: list[str] = ["# VYROX TOPIC HISTORY v1"]
     if history_path.is_file():
-        try:
-            payload = json.loads(history_path.read_text(encoding="utf-8-sig"))
-            used = payload if isinstance(payload, dict) else {}
-        except (OSError, json.JSONDecodeError):
-            used = {}
+        raw_history = history_path.read_text(encoding="utf-8-sig")
+        lines = [line.strip() for line in raw_history.splitlines() if line.strip()]
+        if lines and lines[0] != "# VYROX TOPIC HISTORY v1":
+            raise SystemExit(f"Unrecognized topic history format; refusing to overwrite: {history_path}")
+        history_lines = lines or ["# VYROX TOPIC HISTORY v1"]
+        for line in history_lines[1:]:
+            parts = [part.strip() for part in line.split("|", 2)]
+            if len(parts) != 3 or not parts[1]:
+                raise SystemExit(f"Malformed topic history entry; refusing to select a possibly repeated topic: {line}")
+            try:
+                stamp = int(parts[0])
+            except ValueError:
+                stamp = 0
+            used[parts[1]] = max(stamp, int(used.get(parts[1], 0)))
 
     pool = [item for item in CATALOG if args.category == "any" or item["category"] == args.category]
+    pool = [item for item in pool if item["id"] not in used]
     if not pool:
-        raise SystemExit("No topics available for this category.")
+        raise SystemExit("No unused topics remain in the local catalogue. Add genuinely new topics; history was preserved.")
 
-    # Prefer never-used topics, then the oldest use. Tie-break by stable catalogue order.
-    chosen = min(enumerate(pool), key=lambda pair: (int(used.get(pair[1]["id"], 0)), pair[0]))[1]
+    # Never reuse a previously recorded topic. Stable catalogue order is the tie-break.
+    chosen = pool[0]
     now = datetime.now(timezone.utc).isoformat()
-    used[chosen["id"]] = int(datetime.now(timezone.utc).timestamp())
+    stamp = int(datetime.now(timezone.utc).timestamp())
 
     spec = {
         "title": chosen["title"],
@@ -136,9 +147,35 @@ def main() -> int:
     out = Path(args.output).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # Preserve an auditable human-readable concept file next to every generated spec.
+    concept_path = out.with_name(out.stem + "-concept.txt")
+    concept_lines = [
+        "VYROX VIDEO CONCEPT",
+        f"Topic ID: {chosen['id']}",
+        f"Title: {chosen['title']}",
+        f"Category: {chosen['category']}",
+        f"Created (UTC): {now}",
+        "",
+        "HOOK:",
+        chosen["hook"],
+        "",
+        "SCENE PLAN:",
+    ]
+    for index, scene in enumerate(spec["scenes"], start=1):
+        concept_lines.extend([
+            f"{index}. Narration: {scene['narration']}",
+            f"   Footage search: {scene['search']}",
+            f"   Fallbacks: {', '.join(scene['fallback_search'])}",
+        ])
+    concept_lines.extend(["", "SEO KEYWORD:", chosen["keyword"], ""])
+    concept_path.write_text("\\n".join(concept_lines), encoding="utf-8")
+
     history_path.parent.mkdir(parents=True, exist_ok=True)
-    history_path.write_text(json.dumps(used, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"selectedTopic": chosen["title"], "category": chosen["category"], "projectSpec": str(out), "historyFile": str(history_path), "trendDataUsed": False}, ensure_ascii=False))
+    history_lines.append(f"{stamp} | {chosen['id']} | {chosen['title']}")
+    temp_history = history_path.with_suffix(history_path.suffix + ".tmp")
+    temp_history.write_text("\\n".join(history_lines) + "\\n", encoding="utf-8")
+    temp_history.replace(history_path)
+    print(json.dumps({"selectedTopic": chosen["title"], "category": chosen["category"], "projectSpec": str(out), "conceptFile": str(concept_path), "historyFile": str(history_path), "trendDataUsed": False}, ensure_ascii=False))
     return 0
 
 if __name__ == "__main__":
