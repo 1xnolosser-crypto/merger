@@ -103,12 +103,27 @@ if([ChatGPTAgent.Native]::GetForegroundWindow() -ne $window.Handle -or
    [ChatGPTAgent.Native]::Title($window.Handle) -notmatch '(?i)chatgpt') {
     throw 'CHATGPT_AGENT_ABORTED: ChatGPT is not the foreground window. No text sent.'
 }
+$pageElements=@()
+try {
+    $uia=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+    $limit=[Math]::Min(120,$uia.Count)
+    for($i=0;$i -lt $limit;$i++) {
+        try {
+            $v=$uia.Item($i).Current
+            if(-not $v.IsOffscreen -and ($v.Name -or $v.AutomationId)) {
+                $pageElements += [pscustomobject]@{type=$v.ControlType.ProgrammaticName; name=[string]$v.Name; automationId=[string]$v.AutomationId; helpText=[string]$v.HelpText; focusable=[bool]$v.IsKeyboardFocusable}
+            }
+        } catch {}
+    }
+} catch {}
+$pageContext = "BROWSER ACCESSIBILITY SNAPSHOT (UI Automation; no screenshot/video):`n" + (($pageElements | ConvertTo-Json -Depth 5) -join "`n")
+$messageToSend = $Report + "`n`n" + $pageContext
 $old=$null; $haveOld=$false
 try { $old=Get-Clipboard -Raw; $haveOld=$true } catch {}
 try {
     $composer.SetFocus()
     Start-Sleep -Milliseconds 250
-    Set-Clipboard -Value $Report
+    Set-Clipboard -Value $messageToSend
     $ws=New-Object -ComObject WScript.Shell
     $ws.SendKeys('^v')
     Start-Sleep -Milliseconds 800
@@ -122,8 +137,8 @@ try {
         status='submitted_to_chatgpt'; checkedAt=(Get-Date).ToString('o')
         windowTitle=[ChatGPTAgent.Native]::Title($window.Handle)
         composerAutomationId=[string]$composer.Current.AutomationId
-        reportCharacters=$Report.Length
-        method='UI Automation + clipboard; no screenshots/video/OCR'
+        reportCharacters=$Report.Length; accessibleElements=$pageElements.Count
+        method='UI Automation page tree + clipboard; no screenshots/video/OCR'; pageElements=$pageElements
     }
     $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $LogPath -Encoding UTF8
     'CHATGPT_ACCESSIBILITY_AGENT_SUBMITTED'
