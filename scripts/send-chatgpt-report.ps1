@@ -144,8 +144,8 @@ function Get-ChatGPTComposer {
 
 function Get-ChatGPTTabItems {
     param([System.Windows.Automation.AutomationElement]$Root)
-    $matches = @()
-    if (-not $Root) { return ,$matches }
+    $chatTabsFound = @()
+    if (-not $Root) { return $chatTabsFound }
     try {
         $condition = New-Object System.Windows.Automation.PropertyCondition(
             [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -155,11 +155,11 @@ function Get-ChatGPTTabItems {
         foreach ($item in $items) {
             try {
                 $name = [string]$item.Current.Name
-                if ($name -match "(?i)chatgpt") { $matches += $item }
+                if ($name -match "(?i)chatgpt") { $chatTabsFound += $item }
             } catch {}
         }
     } catch {}
-    return ,$matches
+    return $chatTabsFound
 }
 
 function Select-ChatGPTTab {
