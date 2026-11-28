@@ -18,7 +18,7 @@ $env:PYTHONUTF8 = "1"
 $projectScripts = $PSScriptRoot
 $actualRunner = Join-Path $projectScripts "run-free-video.actual.ps1"
 $tempRunner = $actualRunner + ".download"
-$runnerUrl = "https://raw.githubusercontent.com/1xnolosser-crypto/merger/feat/free-hybrid-video-studio/scripts/run-free-video-worker.ps1"
+$runnerUrl = "https://raw.githubusercontent.com/1xnolosser-crypto/merger/feat/vyrox-direct-local-scheduling/scripts/run-free-video-worker.ps1"
 $projectRoot = Split-Path -Parent $projectScripts
 if (-not $SpecPath) { $SpecPath = Join-Path $projectRoot "examples\free-video-project.json" }
 if (-not $OutputDir) { $OutputDir = Join-Path $projectRoot "media-output" }
@@ -57,7 +57,7 @@ try {
 
     if ($AutoTopic -and -not (Test-Path -LiteralPath $TopicHistoryPath)) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $TopicHistoryPath) | Out-Null
-        $historyUrl = "https://raw.githubusercontent.com/1xnolosser-crypto/merger/feat/free-hybrid-video-studio/topic-history.txt"
+        $historyUrl = "https://raw.githubusercontent.com/1xnolosser-crypto/merger/feat/vyrox-direct-local-scheduling/topic-history.txt"
         $historyTemp = $TopicHistoryPath + ".download"
         Invoke-WebRequest -Uri $historyUrl -OutFile $historyTemp -UseBasicParsing
         $historyText = Get-Content -LiteralPath $historyTemp -Raw -Encoding UTF8
@@ -115,7 +115,7 @@ try {
         }
 
         # Never retry after a successful local render marker: doing so could create duplicate video renders.
-        if ($combined -match 'IMAGEKIT UPLOAD SUCCESSFUL') {
+        if ($combined -match 'LOCAL VIDEO READY') {
             throw "Local video render succeeded but the worker did not confirm every requested output. No duplicate retry was attempted."
         }
         if ($attempt -lt $MaxAttempts) {
