@@ -66,37 +66,97 @@ function Find-Composer($root) {
     if($candidates.Count -gt 0) { return $candidates[$candidates.Count-1] }
     return $null
 }
+
+function Get-ChatGPTTabItems($root) {
+    $matches = @()
+    if (-not $root) { return ,$matches }
+    try {
+        $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::TabItem
+        )
+        $items = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        foreach ($item in $items) {
+            try {
+                $name = [string]$item.Current.Name
+                if ($name -match '(?i)chatgpt') { $matches += $item }
+            } catch {}
+        }
+    } catch {}
+    return ,$matches
+}
+function Select-ChatGPTTab($tab,$window) {
+    $selected = $false
+    try {
+        $pattern = $tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        $pattern.Select()
+        $selected = $true
+    } catch {}
+    if (-not $selected) {
+        try {
+            $pattern = $tab.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+            $pattern.Invoke()
+            $selected = $true
+        } catch {}
+    }
+    if (-not $selected) { return $false }
+    Start-Sleep -Milliseconds 650
+    return (
+        [ChatGPTAgent.Native]::GetForegroundWindow() -eq $window.Handle -and
+        [ChatGPTAgent.Native]::Title($window.Handle) -match '(?i)chatgpt'
+    )
+}
+
 $logDir=Split-Path -Parent $LogPath
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $deadline=(Get-Date).AddSeconds($WaitSeconds)
-$window=$null; $root=$null; $composer=$null; $snapshot=@(); $openedChatGPT=$false
-while((Get-Date) -lt $deadline) {
-    $windows=@([ChatGPTAgent.Native]::EdgeWindows())
-    foreach($w in $windows) {
-        if($w.Title -notmatch '(?i)chatgpt') { continue }
-        [void][ChatGPTAgent.Native]::Activate($w.Handle)
-        Start-Sleep -Milliseconds 350
-        if([ChatGPTAgent.Native]::GetForegroundWindow() -ne $w.Handle) { continue }
-        try {
+$window=$null; $root=$null; $composer=$null; $snapshot=@()
+$edgeWindows=@([ChatGPTAgent.Native]::EdgeWindows())
+$matchedTabTitles=@()
+$selectedTabTitle=""
+foreach($w in $edgeWindows) {
+    [void][ChatGPTAgent.Native]::Activate($w.Handle)
+    Start-Sleep -Milliseconds 250
+    if([ChatGPTAgent.Native]::GetForegroundWindow() -ne $w.Handle) { continue }
+    try {
+        $r=[System.Windows.Automation.AutomationElement]::FromHandle($w.Handle)
+        if(-not $r) { continue }
+
+        # Reuse the active ChatGPT tab without touching any other page.
+        $activeTitle=[ChatGPTAgent.Native]::Title($w.Handle)
+        if($activeTitle -match '(?i)chatgpt') {
+            $c=Find-Composer $r
+            $snapshot += [pscustomobject]@{WindowTitle=$activeTitle; ProcessId=$w.Pid; ComposerFound=[bool]$c; Detection='active-window-title'}
+            if($c) {
+                $window=$w; $root=$r; $composer=$c; $selectedTabTitle=$activeTitle
+                break
+            }
+        }
+
+        # If ChatGPT is in the background, select its named TabItem directly.
+        # Do not cycle through unrelated tabs or open another ChatGPT page.
+        $chatTabs=@(Get-ChatGPTTabItems $r)
+        foreach($tab in $chatTabs) {
+            $tabName=""
+            try { $tabName=[string]$tab.Current.Name } catch {}
+            if($tabName) { $matchedTabTitles += $tabName }
+            if(-not (Select-ChatGPTTab $tab $w)) { continue }
+            $activeTitle=[ChatGPTAgent.Native]::Title($w.Handle)
             $r=[System.Windows.Automation.AutomationElement]::FromHandle($w.Handle)
             if(-not $r) { continue }
             $c=Find-Composer $r
-            $snapshot += [pscustomobject]@{WindowTitle=$w.Title; ProcessId=$w.Pid; ComposerFound=[bool]$c}
-            if($c) { $window=$w; $root=$r; $composer=$c; break }
-        } catch {}
-    }
-    if($composer) { break }
-    $chatTabExists = @($windows | Where-Object { $_.Title -match '(?i)chatgpt' }).Count -gt 0
-    if(-not $chatTabExists -and -not $openedChatGPT) {
-        $edge=Get-Command msedge.exe -ErrorAction SilentlyContinue
-        if($edge) { Start-Process $edge.Source 'https://chatgpt.com/' }
-        else { Start-Process 'https://chatgpt.com/' }
-        $openedChatGPT=$true
-    }
-    Start-Sleep -Seconds 2
+            $snapshot += [pscustomobject]@{WindowTitle=$activeTitle; ProcessId=$w.Pid; ComposerFound=[bool]$c; Detection='selected-tab-item'; TabName=$tabName}
+            if($c) {
+                $window=$w; $root=$r; $composer=$c; $selectedTabTitle=$tabName
+                break
+            }
+        }
+        if($composer) { break }
+    } catch {}
 }
+
 if(-not $composer) {
-    $state=[ordered]@{status='composer_not_found'; checkedAt=(Get-Date).ToString('o'); windows=$snapshot; note='No screenshot or keystrokes were used.'}
+    $state=[ordered]@{status='composer_not_found'; checkedAt=(Get-Date).ToString('o'); edgeWindowCount=$edgeWindows.Count; windows=$snapshot; matchingChatGPTTabTitles=$matchedTabTitles; openedNewTab=$false; note='No unrelated tabs were cycled and no new ChatGPT page was opened. No text was sent.'}
     $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $LogPath -Encoding UTF8
     throw 'CHATGPT_AGENT_ABORTED: ChatGPT tab/composer not accessible through UI Automation. No text sent.'
 }
@@ -245,6 +305,9 @@ try {
         method='UI Automation composer readback + send control/Enter + conversation readback'
     }
     $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $LogPath -Encoding UTF8
+    "Edge windows inspected: $($edgeWindows.Count)"
+    "Selected tab: $selectedTabTitle"
+    "Matching ChatGPT tab captions: $($matchedTabTitles -join ' | ')"
     'CHATGPT_ACCESSIBILITY_AGENT_SUBMITTED'
     'PASTE_VERIFIED: true'
     'SUBMISSION_VERIFIED: true'
