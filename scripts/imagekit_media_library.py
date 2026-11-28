@@ -138,6 +138,8 @@ def upload_file(file_path: Path, folder: str, tags: list[str], overwrite: bool) 
         form_field("fileName", file_path.name),
         form_field("useUniqueFileName", "true" if not overwrite else "false"),
         form_field("overwriteFile", "true" if overwrite else "false"),
+        form_field("isPrivateFile", "false"),
+        form_field("isPublished", "true"),
     ]
     if folder:
         fields.append(form_field("folder", folder))
