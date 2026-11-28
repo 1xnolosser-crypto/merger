@@ -3,7 +3,8 @@ param(
   [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
   [string]$OutputRoot = "",
   [int]$TimeoutMinutes = 180,
-  [string]$FacebookPageId = "1574613545729181"
+  [string]$FacebookPageId = "1574613545729181",
+  [string]$PublishAt = ""
 )
 $ErrorActionPreference = "Stop"
 $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot)
@@ -22,12 +23,7 @@ try {
   Write-Host "VYROX DAILY PRODUCTION + PUBLISH RUN: $(Get-Date -Format o)"
   Write-Host "Project: $ProjectRoot"
   Write-Host "Output: $OutputRoot"
-  if (-not $env:IMAGEKIT_PRIVATE_KEY) {
-    $env:IMAGEKIT_PRIVATE_KEY = [Environment]::GetEnvironmentVariable("IMAGEKIT_PRIVATE_KEY", "User")
-  }
-  if (-not $env:IMAGEKIT_PRIVATE_KEY) {
-    throw "IMAGEKIT_PRIVATE_KEY is not configured for this Windows user. No video run was started."
-  }
+  Write-Host "Direct local-file publishing is enabled; ImageKit is not used."
   $python = Get-Command py.exe -ErrorAction SilentlyContinue
   $ffmpeg = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
   $ffprobe = Get-Command ffprobe.exe -ErrorAction SilentlyContinue
@@ -44,7 +40,7 @@ try {
   $runner = Join-Path $ProjectRoot "scripts\run-free-video.ps1"
   if (-not (Test-Path -LiteralPath $runner)) { throw "Video runner not found: $runner" }
   $started = Get-Date
-  & $runner -AutoTopic -OutputDir $OutputRoot
+  & $runner -AutoTopic -CreateMetricoolPackage -OutputDir $OutputRoot
   $exitCode = $LASTEXITCODE
   if ($exitCode -ne 0) { throw "Video workflow failed with exit code $exitCode. See this log." }
   $package = Get-ChildItem -LiteralPath $OutputRoot -Filter "metricool-publish-package.json" -Recurse -File |
@@ -52,36 +48,43 @@ try {
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if (-not $package) { throw "No fresh publishing package was created during this run." }
   $payload = Get-Content -LiteralPath $package.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-  if (-not $payload.mediaUrl -or -not $payload.description -or -not $payload.youtubeTitle -or -not $payload.localVideoPath) {
+  if (-not $payload.description -or -not $payload.youtubeTitle -or -not $payload.localVideoPath -or -not (Test-Path -LiteralPath $payload.localVideoPath)) {
     throw "The generated publishing package is incomplete. It will not be published."
   }
-  Write-Host "VIDEO_AND_IMAGEKIT_UPLOAD_SUCCEEDED"
+  Write-Host "LOCAL_VIDEO_AND_PUBLISH_PACKAGE_READY"
   Write-Host "Publish package: $($package.FullName)"
-  Write-Host "Starting official YouTube Shorts and Facebook Reels publishing..."
-  & py -3.12 $publisher publish --package $package.FullName --page-id $FacebookPageId --platforms "youtube,facebook"
+  if (-not $PublishAt) {
+    $egyptZone = [TimeZoneInfo]::FindSystemTimeZoneById("Egypt Standard Time")
+    $nowEgypt = [TimeZoneInfo]::ConvertTime((Get-Date), $egyptZone)
+    $targetEgypt = $nowEgypt.Date.AddHours(10)
+    if ($targetEgypt -le $nowEgypt.AddMinutes(15)) { $targetEgypt = $targetEgypt.AddDays(1) }
+    $PublishAt = [TimeZoneInfo]::ConvertTimeToUtc($targetEgypt, $egyptZone).ToString("yyyy-MM-ddTHH:mm:ssZ")
+  }
+  Write-Host ("Scheduling directly from the local MP4 for: " + $PublishAt)
+  & py -3.12 $publisher publish --package $package.FullName --page-id $FacebookPageId --platforms "youtube,facebook" --publish-at $PublishAt
   $publishCode = $LASTEXITCODE
-  if ($publishCode -ne 0) { throw "One or more social platforms did not confirm publication. Exit code: $publishCode. The publication-state file prevents reposting a platform already confirmed successful." }
+  if ($publishCode -ne 0) { throw "One or more social platforms did not confirm scheduling. Exit code: $publishCode. The publication-state file prevents duplicate uploads on retry." }
   $statePath = Join-Path $package.DirectoryName "publication-state.json"
   if (-not (Test-Path -LiteralPath $statePath)) { throw "Publisher returned success but publication-state.json is missing." }
   $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-  if ($state.status -ne "published") { throw "Publication state is not fully confirmed: $($state.status)" }
+  if ($state.status -ne "scheduled") { throw "Scheduling state is not fully confirmed: $($state.status)" }
   $summary = [ordered]@{
     runId = $stamp
     startedAt = $started.ToString("o")
     completedAt = (Get-Date).ToString("o")
-    status = "published"
+    status = "scheduled"
     topicId = $payload.topicId
     title = $payload.title
     package = $package.FullName
-    mediaUrl = $payload.mediaUrl
+    scheduledAt = $state.scheduledAt
     youtubeUrl = $state.platforms.youtube.url
     facebookUrl = $state.platforms.facebook.url
     log = $log
   }
   $summary | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $logDir "$stamp-result.json") -Encoding UTF8
-  Write-Host "VYROX_DAILY_RUN_PUBLISHED_SUCCESSFULLY" -ForegroundColor Green
-  Write-Host ("YouTube: " + $state.platforms.youtube.url)
-  Write-Host ("Facebook: " + $state.platforms.facebook.url)
+  Write-Host "VYROX_DAILY_RUN_SCHEDULED_SUCCESSFULLY" -ForegroundColor Green
+  Write-Host ("Scheduled YouTube Short: " + $state.platforms.youtube.url)
+  Write-Host ("Scheduled Facebook Reel: " + $state.platforms.facebook.url)
   exit 0
 }
 catch {
