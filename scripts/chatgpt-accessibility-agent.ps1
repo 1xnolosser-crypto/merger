@@ -1,6 +1,6 @@
 # ChatGPT Accessibility Agent for Windows PowerShell 5.1
 # Reads Edge's UI Automation tree (no screenshots, video, OCR, or browser extensions).
-# Opens ChatGPT if needed, identifies the ChatGPT tab, focuses its composer, and sends a report.
+# Reuses an existing ChatGPT tab by its real address-bar URL. Never opens a new page.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$Report,
@@ -66,44 +66,166 @@ function Find-Composer($root) {
     if($candidates.Count -gt 0) { return $candidates[$candidates.Count-1] }
     return $null
 }
+
+function Get-EdgeAddressBarUrl($root) {
+    if (-not $root) { return "" }
+    $element = $null
+    try {
+        $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::AutomationIdProperty, "view_1017"
+        )
+        $element = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    } catch {}
+    if (-not $element) {
+        try {
+            $condition = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::NameProperty, "Address and search bar"
+            )
+            $element = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        } catch {}
+    }
+    if ($element) {
+        try {
+            $pattern = $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            return ([string]$pattern.Current.Value).Trim()
+        } catch {}
+    }
+    return ""
+}
+function Test-ChatGPTPage($root, [string]$windowTitle) {
+    $address = Get-EdgeAddressBarUrl $root
+    if ($address) {
+        $uri = $null
+        if ([Uri]::TryCreate($address, [UriKind]::Absolute, [ref]$uri)) {
+            return ($uri.Host -eq "chatgpt.com" -or $uri.Host.EndsWith(".chatgpt.com"))
+        }
+    }
+    return ($windowTitle -match '(?i)chatgpt')
+}
+function Get-EdgeTabItems($root) {
+    try {
+        $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::TabItem
+        )
+        return @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition))
+    } catch { return @() }
+}
+function Get-SelectedEdgeTab($tabs) {
+    foreach ($tab in $tabs) {
+        try {
+            $pattern = $tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+            if ($pattern.Current.IsSelected) { return $tab }
+        } catch {}
+    }
+    return $null
+}
+function Select-EdgeTab($tab) {
+    try {
+        $pattern = $tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        if (-not $pattern.Current.IsSelected) { $pattern.Select() }
+        Start-Sleep -Milliseconds 500
+        return $true
+    } catch {
+        try {
+            $invoke = $tab.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+            $invoke.Invoke()
+            Start-Sleep -Milliseconds 500
+            return $true
+        } catch { return $false }
+    }
+}
+
 $logDir=Split-Path -Parent $LogPath
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $deadline=(Get-Date).AddSeconds($WaitSeconds)
-$window=$null; $root=$null; $composer=$null; $snapshot=@(); $openedChatGPT=$false
-while((Get-Date) -lt $deadline) {
-    $windows=@([ChatGPTAgent.Native]::EdgeWindows())
-    foreach($w in $windows) {
-        if($w.Title -notmatch '(?i)chatgpt') { continue }
-        [void][ChatGPTAgent.Native]::Activate($w.Handle)
-        Start-Sleep -Milliseconds 350
-        if([ChatGPTAgent.Native]::GetForegroundWindow() -ne $w.Handle) { continue }
-        try {
+$window=$null; $root=$null; $composer=$null; $snapshot=@()
+$edgeWindows=@([ChatGPTAgent.Native]::EdgeWindows())
+$originalForeground = [ChatGPTAgent.Native]::GetForegroundWindow()
+$matchedTabTitles=@()
+$selectedTabTitle=""
+
+foreach($w in $edgeWindows) {
+    [void][ChatGPTAgent.Native]::Activate($w.Handle)
+    Start-Sleep -Milliseconds 250
+    if([ChatGPTAgent.Native]::GetForegroundWindow() -ne $w.Handle) { continue }
+    try {
+        $r=[System.Windows.Automation.AutomationElement]::FromHandle($w.Handle)
+        if(-not $r) { continue }
+
+        # Fast path: recognize the already-active ChatGPT page by its actual URL.
+        $activeTitle = [ChatGPTAgent.Native]::Title($w.Handle)
+        if(Test-ChatGPTPage $r $activeTitle) {
+            $c=Find-Composer $r
+            $snapshot += [pscustomobject]@{
+                WindowTitle=$activeTitle; ProcessId=$w.Pid
+                ComposerFound=[bool]$c; Detection='active-page-url'
+                AddressBarUrl=(Get-EdgeAddressBarUrl $r)
+            }
+            if($c) {
+                $window=$w; $root=$r; $composer=$c; $selectedTabTitle=$activeTitle
+                break
+            }
+        }
+
+        # Custom conversation titles do not contain "ChatGPT". Inspect existing
+        # Edge tabs by the actual URL in the address bar; never open a new tab/window.
+        $tabs = @(Get-EdgeTabItems $r)
+        $originalTab = Get-SelectedEdgeTab $tabs
+        foreach($tab in $tabs) {
+            $tabName = ""
+            try { $tabName = [string]$tab.Current.Name } catch {}
+            if($tabName) { $matchedTabTitles += $tabName }
+            if(-not (Select-EdgeTab $tab)) { continue }
+
+            $activeTitle = [ChatGPTAgent.Native]::Title($w.Handle)
             $r=[System.Windows.Automation.AutomationElement]::FromHandle($w.Handle)
             if(-not $r) { continue }
+            $address = Get-EdgeAddressBarUrl $r
+            $snapshot += [pscustomobject]@{
+                WindowTitle=$activeTitle; ProcessId=$w.Pid
+                ComposerFound=$false; Detection='existing-tab-url'
+                TabName=$tabName; AddressBarUrl=$address
+            }
+            if(-not (Test-ChatGPTPage $r $activeTitle)) { continue }
             $c=Find-Composer $r
-            $snapshot += [pscustomobject]@{WindowTitle=$w.Title; ProcessId=$w.Pid; ComposerFound=[bool]$c}
-            if($c) { $window=$w; $root=$r; $composer=$c; break }
-        } catch {}
-    }
-    if($composer) { break }
-    $chatTabExists = @($windows | Where-Object { $_.Title -match '(?i)chatgpt' }).Count -gt 0
-    if(-not $chatTabExists -and -not $openedChatGPT) {
-        $edge=Get-Command msedge.exe -ErrorAction SilentlyContinue
-        if($edge) { Start-Process $edge.Source 'https://chatgpt.com/' }
-        else { Start-Process 'https://chatgpt.com/' }
-        $openedChatGPT=$true
-    }
-    Start-Sleep -Seconds 2
+            if($c) {
+                $window=$w; $root=$r; $composer=$c; $selectedTabTitle=$tabName
+                break
+            }
+        }
+        if($composer) { break }
+
+        # Restore the user's original selected tab if this window had no ChatGPT page.
+        if($originalTab) { [void](Select-EdgeTab $originalTab) }
+    } catch {}
 }
+
 if(-not $composer) {
-    $state=[ordered]@{status='composer_not_found'; checkedAt=(Get-Date).ToString('o'); windows=$snapshot; note='No screenshot or keystrokes were used.'}
+    if($originalForeground -ne [IntPtr]::Zero) {
+        [void][ChatGPTAgent.Native]::Activate($originalForeground)
+    }
+    $state=[ordered]@{
+        status='composer_not_found'; checkedAt=(Get-Date).ToString('o')
+        edgeWindowCount=$edgeWindows.Count; windows=$snapshot
+        matchingTabCaptions=$matchedTabTitles; openedNewTab=$false
+        note='Searched existing Edge tabs by address-bar URL. No new ChatGPT page or window was opened. No text was sent.'
+    }
     $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $LogPath -Encoding UTF8
-    throw 'CHATGPT_AGENT_ABORTED: ChatGPT tab/composer not accessible through UI Automation. No text sent.'
+    throw 'CHATGPT_AGENT_ABORTED: No existing ChatGPT tab with an accessible composer was found. No new page or window was opened; no text sent.'
 }
-# Revalidate destination immediately before focusing or typing.
+
+# Revalidate the active destination immediately before typing.
+$activeTitle = [ChatGPTAgent.Native]::Title($window.Handle)
+$activeRoot = [System.Windows.Automation.AutomationElement]::FromHandle($window.Handle)
 if([ChatGPTAgent.Native]::GetForegroundWindow() -ne $window.Handle -or
-   [ChatGPTAgent.Native]::Title($window.Handle) -notmatch '(?i)chatgpt') {
-    throw 'CHATGPT_AGENT_ABORTED: ChatGPT is not the foreground window. No text sent.'
+   -not (Test-ChatGPTPage $activeRoot $activeTitle)) {
+    throw 'CHATGPT_AGENT_ABORTED: Selected page is not the existing ChatGPT site. No text sent.'
+}
+$root = $activeRoot
+$composer = Find-Composer $root
+if(-not $composer) {
+    throw 'CHATGPT_AGENT_ABORTED: Existing ChatGPT page found but its composer is inaccessible. No text sent.'
 }
 $pageElements=@()
 try {
