@@ -103,7 +103,7 @@ function Get-ChatGPTComposer {
         $named = @($visible | Where-Object {
             $n = ""
             try { $n = [string]$_.Current.Name } catch {}
-            $n -match "(?i)message\s*chatgpt|send\s*a\s*message|chatgpt|رسالة|اكتب"
+            $n -match "(?i)message\s*chatgpt|send\s*a\s*message|chatgpt"
         })
         if ($named.Count -gt 0) { return $named[$named.Count - 1] }
 
