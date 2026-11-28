@@ -138,7 +138,7 @@ if (-not $finalVideo) {
 }
 Write-Host "LOCAL VIDEO READY" -ForegroundColor Green
 Write-Host ("Local MP4: " + $finalVideo.FullName)
-Write-Host ("File size: " + [math]::Round($finalVideo.Length / 1MB, 2) + " MB)
+Write-Host ("File size: " + [math]::Round($finalVideo.Length / 1MB, 2) + " MB")
 
 # Build a deterministic SEO/social handoff package only when explicitly requested.
 if ($CreateMetricoolPackage) {
