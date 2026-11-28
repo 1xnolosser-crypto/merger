@@ -68,6 +68,8 @@ try {
   if (-not (Test-Path -LiteralPath $statePath)) { throw "Publisher returned success but publication-state.json is missing." }
   $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
   if ($state.status -ne "scheduled") { throw "Scheduling state is not fully confirmed: $($state.status)" }
+  # Emit the bridge validation marker only after the saved state confirms scheduling.
+  Write-Host "ALL_REQUESTED_PLATFORMS_SCHEDULED"
   $summary = [ordered]@{
     runId = $stamp
     startedAt = $started.ToString("o")
