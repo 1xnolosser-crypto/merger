@@ -168,12 +168,12 @@ def main() -> int:
             f"   Fallbacks: {', '.join(scene['fallback_search'])}",
         ])
     concept_lines.extend(["", "SEO KEYWORD:", chosen["keyword"], ""])
-    concept_path.write_text("\\n".join(concept_lines), encoding="utf-8")
+    concept_path.write_text("\n".join(concept_lines), encoding="utf-8")
 
     history_path.parent.mkdir(parents=True, exist_ok=True)
     history_lines.append(f"{stamp} | {chosen['id']} | {chosen['title']}")
     temp_history = history_path.with_suffix(history_path.suffix + ".tmp")
-    temp_history.write_text("\\n".join(history_lines) + "\\n", encoding="utf-8")
+    temp_history.write_text("\n".join(history_lines) + "\n", encoding="utf-8")
     temp_history.replace(history_path)
     print(json.dumps({"selectedTopic": chosen["title"], "category": chosen["category"], "projectSpec": str(out), "conceptFile": str(concept_path), "historyFile": str(history_path), "trendDataUsed": False}, ensure_ascii=False))
     return 0
