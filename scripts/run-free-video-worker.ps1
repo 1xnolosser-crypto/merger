@@ -39,6 +39,31 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue) -or
 }
 if ($AutoTopic) {
   $planner = Join-Path $PSScriptRoot "topic_seo_planner.py"
+  # Self-heal an incomplete local installation by restoring the planner from
+  # the same pinned project branch. Validate UTF-8 and required CLI markers
+  # before replacing/creating the local file; never overwrite a valid planner.
+  if (-not (Test-Path -LiteralPath $planner)) {
+    $plannerUrl = "https://raw.githubusercontent.com/1xnolosser-crypto/merger/feat/free-hybrid-video-studio/scripts/topic_seo_planner.py"
+    $plannerTemp = $planner + ".download"
+    try {
+      Invoke-WebRequest -Uri $plannerUrl -OutFile $plannerTemp -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" }
+      if (-not (Test-Path -LiteralPath $plannerTemp) -or (Get-Item -LiteralPath $plannerTemp).Length -lt 3000) {
+        throw "Topic planner download failed size validation."
+      }
+      $plannerBytes = [IO.File]::ReadAllBytes($plannerTemp)
+      $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+      $plannerText = $strictUtf8.GetString($plannerBytes)
+      if ($plannerText -notmatch 'CATALOG' -or $plannerText -notmatch 'topic-history.txt' -or $plannerText -notmatch 'selectedTopic') {
+        throw "Downloaded topic planner failed content validation."
+      }
+      $null = & py -3.12 -m py_compile $plannerTemp 2>&1
+      if ($LASTEXITCODE -ne 0) { throw "Downloaded topic planner failed Python syntax validation." }
+      Move-Item -LiteralPath $plannerTemp -Destination $planner -Force
+      Write-Host "Restored missing topic SEO planner from the project repository." -ForegroundColor Green
+    } finally {
+      Remove-Item -LiteralPath $plannerTemp -Force -ErrorAction SilentlyContinue
+    }
+  }
   $SpecPath = Join-Path $OutputDir "auto-topic-project.json"
   Write-Host "Selecting a fresh Arabic Shorts topic and preparing SEO metadata..." -ForegroundColor Cyan
   $TopicHistoryPath = [IO.Path]::GetFullPath($TopicHistoryPath)
