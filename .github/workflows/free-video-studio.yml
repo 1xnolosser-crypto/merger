@@ -25,10 +25,10 @@ jobs:
           python-version: "3.12"
 
       - name: Compile Python scripts
-        run: python -m py_compile scripts/free_video_studio.py tests/test_free_video_studio.py
+        run: python -m py_compile scripts/free_video_studio.py scripts/topic_seo_planner.py tests/test_free_video_studio.py tests/test_topic_seo_planner.py
 
       - name: Validate sample video specification
         run: python -m json.tool examples/free-video-project.json > /dev/null
 
       - name: Run free-studio unit tests
-        run: python -m unittest discover -s tests -p "test_free_video_studio.py" -v
+        run: python -m unittest discover -s tests -p "test_*.py" -v
