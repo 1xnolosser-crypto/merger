@@ -69,7 +69,7 @@ function Find-Composer($root) {
 $logDir=Split-Path -Parent $LogPath
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $deadline=(Get-Date).AddSeconds($WaitSeconds)
-$window=$null; $root=$null; $composer=$null; $snapshot=@()
+$window=$null; $root=$null; $composer=$null; $snapshot=@(); $openedChatGPT=$false
 while((Get-Date) -lt $deadline) {
     $windows=@([ChatGPTAgent.Native]::EdgeWindows())
     foreach($w in $windows) {
@@ -86,10 +86,12 @@ while((Get-Date) -lt $deadline) {
         } catch {}
     }
     if($composer) { break }
-    if($windows.Count -eq 0) {
+    $chatTabExists = @($windows | Where-Object { $_.Title -match '(?i)chatgpt' }).Count -gt 0
+    if(-not $chatTabExists -and -not $openedChatGPT) {
         $edge=Get-Command msedge.exe -ErrorAction SilentlyContinue
         if($edge) { Start-Process $edge.Source 'https://chatgpt.com/' }
         else { Start-Process 'https://chatgpt.com/' }
+        $openedChatGPT=$true
     }
     Start-Sleep -Seconds 2
 }
