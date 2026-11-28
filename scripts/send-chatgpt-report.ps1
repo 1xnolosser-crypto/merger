@@ -141,8 +141,7 @@ function Wait-ForChatGPTComposerReady {
         [string]$ExpectedText,
         [int]$TimeoutSeconds
     )
-    $head = $ExpectedText.Substring(0, [Math]::Min(40, $ExpectedText.Length))
-    $tail = $ExpectedText.Substring([Math]::Max(0, $ExpectedText.Length - 40))
+    $expectedNormalized = [regex]::Replace($ExpectedText, '\s+', ' ').Trim()
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $lastText = $null
     $stableSince = $null
@@ -153,7 +152,8 @@ function Wait-ForChatGPTComposerReady {
         $enabled = $false
         if ($button) { try { $enabled = [bool]$button.Current.IsEnabled } catch {} }
 
-        $complete = ($null -ne $current -and $current.Contains($head) -and $current.Contains($tail))
+        $currentNormalized = if ($null -ne $current) { [regex]::Replace([string]$current, '\s+', ' ').Trim() } else { '' }
+        $complete = ($currentNormalized -ceq $expectedNormalized)
         if ($complete -and $enabled) {
             if ($current -ceq $lastText) {
                 if (-not $stableSince) { $stableSince = Get-Date }
@@ -180,8 +180,7 @@ function Submit-ChatGPTMessage {
         [int]$TimeoutSeconds
     )
     [void](Wait-ForChatGPTComposerReady -Root $Root -ExpectedText $ExpectedText -TimeoutSeconds $TimeoutSeconds)
-    $head = $ExpectedText.Substring(0, [Math]::Min(80, $ExpectedText.Length))
-    $tail = $ExpectedText.Substring([Math]::Max(0, $ExpectedText.Length - 80))
+    $expectedNormalized = [regex]::Replace($ExpectedText, '\s+', ' ').Trim()
 
     $button = Get-ChatGPTSendButton -Root $Root
     if (-not $button -or -not $button.Current.IsEnabled) {
@@ -212,7 +211,8 @@ function Submit-ChatGPTMessage {
             $composerCleared = $true
         }
         $pageText = Get-ChatGPTPageText -Root $Root
-        if ($pageText.Contains($head) -and $pageText.Contains($tail)) {
+        $pageNormalized = [regex]::Replace([string]$pageText, '\s+', ' ').Trim()
+        if ($pageNormalized.Contains($expectedNormalized)) {
             $messageVisible = $true
         }
         if ($composerCleared -and $messageVisible) { return $true }
