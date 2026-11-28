@@ -12,6 +12,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -137,13 +138,15 @@ def load_package(path: Path) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         raise PublishError(f"Cannot read publish package: {exc}") from None
-    if not payload.get("youtubeTitle") or not payload.get("description") or not payload.get("mediaUrl"):
-        raise PublishError("Publish package is missing title, description, or public media URL.")
+    if not payload.get("youtubeTitle") or not payload.get("description") or not payload.get("title"):
+        raise PublishError("Publish package is missing title or description.")
     video_path = Path(payload.get("localVideoPath") or "")
     if not video_path.is_file():
         raise PublishError(f"Local MP4 is missing: {video_path}")
     if video_path.suffix.lower() != ".mp4":
         raise PublishError("Only MP4 video files are accepted.")
+    if video_path.stat().st_size <= 0:
+        raise PublishError("Local MP4 is empty.")
     return payload
 
 
@@ -166,18 +169,42 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
     temp.replace(path)
 
 
-def publish_youtube(package: dict[str, Any], video_path: Path) -> str:
+def parse_publish_at(value: str) -> datetime:
+    raw = value.strip().replace("Z", "+00:00")
+    try:
+        result = datetime.fromisoformat(raw)
+    except ValueError:
+        raise PublishError("Publish time must be ISO 8601 with a timezone offset, e.g. 2026-11-29T10:00:00+02:00.") from None
+    if result.tzinfo is None:
+        raise PublishError("Publish time must include a timezone offset.")
+    result = result.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if result <= now.replace(microsecond=0):
+        raise PublishError("Publish time is in the past. No platform upload was started.")
+    if result < now + __import__("datetime").timedelta(minutes=10):
+        raise PublishError("Choose a publish time at least 10 minutes from now.")
+    if result > now + __import__("datetime").timedelta(days=75):
+        raise PublishError("Choose a publish time within the next 75 days.")
+    return result
+
+
+def publish_youtube(package: dict[str, Any], video_path: Path, publish_at: datetime) -> str:
     from googleapiclient.http import MediaFileUpload
     youtube = youtube_service()
     tags = [str(x)[:100] for x in package.get("tags", []) if str(x).strip()]
+    scheduled_iso = publish_at.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     request_body = {
         "snippet": {
             "title": str(package["youtubeTitle"])[:100],
             "description": str(package["description"])[:5000],
             "tags": tags[:30],
-            "categoryId": "27",
+            "categoryId": "28",
         },
-        "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False},
+        "status": {
+            "privacyStatus": "private",
+            "publishAt": scheduled_iso,
+            "selfDeclaredMadeForKids": False,
+        },
     }
     media = MediaFileUpload(str(video_path), mimetype="video/mp4", chunksize=1024 * 1024, resumable=True)
     request = youtube.videos().insert(part="snippet,status", body=request_body, media_body=media)
@@ -199,7 +226,6 @@ def publish_youtube(package: dict[str, Any], video_path: Path) -> str:
     video_id = str(response.get("id") or "")
     if not video_id:
         raise PublishError("YouTube API returned no video ID.")
-    # Confirm that YouTube processed the video, not merely accepted the upload bytes.
     deadline = time.time() + 600
     while time.time() < deadline:
         details = youtube.videos().list(part="status,processingDetails", id=video_id).execute()
@@ -210,16 +236,16 @@ def publish_youtube(package: dict[str, Any], video_path: Path) -> str:
             upload_status = status.get("uploadStatus")
             if upload_status in {"rejected", "failed", "deleted"}:
                 raise PublishError(f"YouTube rejected or failed video processing: {upload_status}")
-            if upload_status == "processed" or processing == "succeeded":
-                if status.get("privacyStatus") != "public":
-                    raise PublishError("YouTube processed the video but it is not public.")
+            if (upload_status == "processed" or processing == "succeeded") and status.get("publishAt"):
+                if status.get("privacyStatus") != "private":
+                    raise PublishError("YouTube upload is not private while awaiting its scheduled release.")
                 return "https://www.youtube.com/shorts/" + video_id
-        print("Waiting for YouTube video processing...")
+        print("Waiting for YouTube processing and scheduled-publication confirmation...")
         time.sleep(20)
-    raise PublishError("YouTube accepted the upload but processing was not confirmed within 10 minutes.")
+    raise PublishError("YouTube accepted the upload but processing/schedule was not confirmed within 10 minutes.")
 
 
-def publish_facebook(package: dict[str, Any], video_path: Path, page_id: str) -> str:
+def publish_facebook(package: dict[str, Any], video_path: Path, page_id: str, publish_at: datetime) -> str:
     try:
         import requests
     except ImportError:
@@ -251,10 +277,12 @@ def publish_facebook(package: dict[str, Any], video_path: Path, page_id: str) ->
     upload_data = upload.json() if upload.text.strip() else {}
     if upload_data.get("success") is False:
         raise PublishError("Facebook rejected the binary upload.")
+    scheduled_timestamp = int(publish_at.timestamp())
     finish_data = {
         "upload_phase": "FINISH",
         "video_id": video_id,
-        "video_state": "PUBLISHED",
+        "video_state": "SCHEDULED",
+        "scheduled_publish_time": str(scheduled_timestamp),
         "title": str(package["title"])[:255],
         "description": str(package["description"])[:5000],
         "is_ai_generated": "true",
@@ -263,8 +291,8 @@ def publish_facebook(package: dict[str, Any], video_path: Path, page_id: str) ->
     if not finish.ok:
         raise PublishError(f"Facebook FINISH failed HTTP {finish.status_code}: {finish.text[:1200]}")
     result = finish.json()
-    if result.get("success") is not True:
-        raise PublishError(f"Facebook did not confirm publication: {result}")
+    if result.get("success") is not True or str(result.get("video_id") or video_id) != video_id:
+        raise PublishError(f"Facebook did not confirm the scheduled Reel: {result}")
     return f"https://www.facebook.com/reel/{video_id}"
 
 
@@ -287,17 +315,18 @@ def check_credentials(page_id: str) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Publish a VYROX video to YouTube Shorts and Facebook Reels.")
+    parser = argparse.ArgumentParser(description="Schedule a VYROX video directly from the local MP4 to YouTube Shorts and Facebook Reels.")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("authorize-youtube", help="One-time interactive Google OAuth consent.")
     fb = sub.add_parser("configure-facebook", help="Exchange a user token for a long-lived Page token and store it securely.")
     fb.add_argument("--page-id", default="1574613545729181")
     check = sub.add_parser("check", help="Check that local credentials are present.")
     check.add_argument("--page-id", default="1574613545729181")
-    pub = sub.add_parser("publish", help="Publish a prepared package to both platforms.")
+    pub = sub.add_parser("publish", help="Upload and schedule a prepared local package.")
     pub.add_argument("--package", required=True)
     pub.add_argument("--page-id", default="1574613545729181")
     pub.add_argument("--platforms", default="youtube,facebook")
+    pub.add_argument("--publish-at", required=True, help="ISO 8601 date/time with timezone offset.")
     args = parser.parse_args()
     try:
         if args.command == "authorize-youtube":
@@ -307,34 +336,46 @@ def main() -> int:
         elif args.command == "check":
             check_credentials(args.page_id)
         else:
+            publish_at = parse_publish_at(args.publish_at)
             package_path = Path(args.package).expanduser().resolve()
             package = load_package(package_path)
+            video_path = Path(package["localVideoPath"])
             state_file = state_path(package_path)
             state = read_state(state_file)
             state.setdefault("platforms", {})
             requested = [x.strip().lower() for x in args.platforms.split(",") if x.strip()]
-            if "youtube" in requested and not state["platforms"].get("youtube", {}).get("success"):
-                print("Publishing YouTube Short...")
-                url = publish_youtube(package, Path(package["localVideoPath"]))
-                state["platforms"]["youtube"] = {"success": True, "url": url, "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            if not requested or any(p not in {"youtube", "facebook"} for p in requested):
+                raise PublishError("Platforms must be a comma-separated subset of youtube,facebook.")
+            for platform in requested:
+                previous = state["platforms"].get(platform, {})
+                if previous.get("success") or previous.get("scheduled"):
+                    print(platform.upper() + "_ALREADY_HANDLED: " + str(previous.get("url", "")))
+                    continue
+                print("Scheduling " + platform + " directly from the local MP4...")
+                if platform == "youtube":
+                    url = publish_youtube(package, video_path, publish_at)
+                else:
+                    url = publish_facebook(package, video_path, args.page_id, publish_at)
+                state["platforms"][platform] = {
+                    "scheduled": True,
+                    "success": False,
+                    "url": url,
+                    "scheduledAt": publish_at.isoformat(),
+                    "submittedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                }
                 write_state(state_file, state)
-                print("YOUTUBE_PUBLISHED: " + url)
-            elif "youtube" in requested:
-                print("YOUTUBE_ALREADY_PUBLISHED: " + str(state["platforms"]["youtube"].get("url", "")))
-            if "facebook" in requested and not state["platforms"].get("facebook", {}).get("success"):
-                print("Publishing Facebook Reel...")
-                url = publish_facebook(package, Path(package["localVideoPath"]), args.page_id)
-                state["platforms"]["facebook"] = {"success": True, "url": url, "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-                write_state(state_file, state)
-                print("FACEBOOK_REEL_PUBLISHED: " + url)
-            elif "facebook" in requested:
-                print("FACEBOOK_ALREADY_PUBLISHED: " + str(state["platforms"]["facebook"].get("url", "")))
-            state["status"] = "published" if all(state["platforms"].get(p, {}).get("success") for p in requested) else "partial"
-            state["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                print(platform.upper() + "_SCHEDULED: " + url)
+            complete = all(
+                state["platforms"].get(p, {}).get("scheduled") or state["platforms"].get(p, {}).get("success")
+                for p in requested
+            )
+            state["status"] = "scheduled" if complete else "partial"
+            state["scheduledAt"] = publish_at.isoformat()
+            state["updatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             write_state(state_file, state)
-            if state["status"] != "published":
-                raise PublishError("One or more requested platforms did not confirm publication.")
-            print("ALL_REQUESTED_PLATFORMS_CONFIRMED")
+            if not complete:
+                raise PublishError("One or more requested platforms did not confirm scheduling.")
+            print("ALL_REQUESTED_PLATFORMS_SCHEDULED")
         return 0
     except PublishError as exc:
         print("PUBLISH_ERROR: " + str(exc), file=sys.stderr)
