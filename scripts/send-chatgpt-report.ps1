@@ -141,6 +141,53 @@ function Get-ChatGPTComposer {
     }
 }
 
+
+function Get-ChatGPTTabItems {
+    param([System.Windows.Automation.AutomationElement]$Root)
+    $matches = @()
+    if (-not $Root) { return ,$matches }
+    try {
+        $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::TabItem
+        )
+        $items = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        foreach ($item in $items) {
+            try {
+                $name = [string]$item.Current.Name
+                if ($name -match "(?i)chatgpt") { $matches += $item }
+            } catch {}
+        }
+    } catch {}
+    return ,$matches
+}
+
+function Select-ChatGPTTab {
+    param(
+        [System.Windows.Automation.AutomationElement]$Tab,
+        [BridgeNative.EdgeWindow]$Window
+    )
+    $selected = $false
+    try {
+        $pattern = $Tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        $pattern.Select()
+        $selected = $true
+    } catch {}
+    if (-not $selected) {
+        try {
+            $pattern = $Tab.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+            $pattern.Invoke()
+            $selected = $true
+        } catch {}
+    }
+    if (-not $selected) { return $false }
+    Start-Sleep -Milliseconds 650
+    return (
+        [BridgeNative.WindowApi]::GetForegroundWindowHandle() -eq $Window.Handle -and
+        [BridgeNative.WindowApi]::GetTitle($Window.Handle) -match "(?i)chatgpt"
+    )
+}
+
 $windows = @([BridgeNative.WindowApi]::GetEdgeWindows())
 if ($windows.Count -eq 0) {
     throw "CHATGPT_SEND_ABORTED: No visible Microsoft Edge browser window was found."
@@ -152,44 +199,58 @@ $targetWindow = $null
 $targetComposer = $null
 $targetTitle = $null
 
+$matchedTabTitles = @()
+$targetTabName = ""
 foreach ($window in $windows) {
     [void][BridgeNative.WindowApi]::Activate($window.Handle)
-    Start-Sleep -Milliseconds 450
+    Start-Sleep -Milliseconds 300
     if ([BridgeNative.WindowApi]::GetForegroundWindowHandle() -ne $window.Handle) { continue }
 
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($window.Handle)
     if (-not $root) { continue }
 
-    for ($tab = 0; $tab -lt $MaxTabsPerWindow; $tab++) {
-        Start-Sleep -Milliseconds 180
-        $activeTitle = [BridgeNative.WindowApi]::GetTitle($window.Handle)
-
-        # Never inspect/send into a tab unless its own active-tab title identifies ChatGPT.
-        if ($activeTitle -match "(?i)chatgpt") {
-            $composer = Get-ChatGPTComposer -Root $root
-            if ($composer) {
-                $target = $root
-                $targetWindow = $window
-                $targetComposer = $composer
-                $targetTitle = $activeTitle
-                break
-            }
+    # Fast path: reuse ChatGPT immediately when it is already the active tab.
+    $activeTitle = [BridgeNative.WindowApi]::GetTitle($window.Handle)
+    if ($activeTitle -match "(?i)chatgpt") {
+        $composer = Get-ChatGPTComposer -Root $root
+        if ($composer) {
+            $target = $root
+            $targetWindow = $window
+            $targetComposer = $composer
+            $targetTitle = $activeTitle
+            $targetTabName = $activeTitle
+            break
         }
-
-        $ws.SendKeys("^{TAB}")
-        Start-Sleep -Milliseconds 350
     }
 
+    # Otherwise select the matching Edge TabItem directly. Never cycle through
+    # unrelated pages with Ctrl+Tab and never restore by blind reverse cycling.
+    $chatTabs = @(Get-ChatGPTTabItems -Root $root)
+    foreach ($tabItem in $chatTabs) {
+        $tabName = ""
+        try { $tabName = [string]$tabItem.Current.Name } catch {}
+        if ($tabName) { $matchedTabTitles += $tabName }
+        if (-not (Select-ChatGPTTab -Tab $tabItem -Window $window)) { continue }
+
+        $activeTitle = [BridgeNative.WindowApi]::GetTitle($window.Handle)
+        if ($activeTitle -notmatch "(?i)chatgpt") { continue }
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle($window.Handle)
+        if (-not $root) { continue }
+        $composer = Get-ChatGPTComposer -Root $root
+        if ($composer) {
+            $target = $root
+            $targetWindow = $window
+            $targetComposer = $composer
+            $targetTitle = $activeTitle
+            $targetTabName = $tabName
+            break
+        }
+    }
     if ($target) { break }
-    # Return to the original tab before moving to another Edge window.
-    for ($restore = 0; $restore -lt $MaxTabsPerWindow; $restore++) {
-        $ws.SendKeys("^+{TAB}")
-        Start-Sleep -Milliseconds 25
-    }
 }
 
 if (-not $target) {
-    throw "CHATGPT_SEND_ABORTED: No active Edge tab with a ChatGPT title and accessible message composer was found. No text was sent."
+    throw ("CHATGPT_SEND_ABORTED: No identifiable ChatGPT tab with an accessible composer was found. No unrelated tabs were cycled and no text was sent. Edge windows inspected: " + $windows.Count + "; ChatGPT tab captions: " + ($matchedTabTitles -join " | "))
 }
 
 [void][BridgeNative.WindowApi]::Activate($targetWindow.Handle)
@@ -265,7 +326,10 @@ try {
     "CHATGPT_MESSAGE_SUBMITTED"
     "PASTE_VERIFIED: true"
     "SUBMISSION_VERIFIED: true"
-    "Destination: verified ChatGPT tab in Microsoft Edge"
+    "Destination: verified existing ChatGPT tab in Microsoft Edge"
+    "Edge windows inspected: $($windows.Count)"
+    "Selected tab: $targetTabName"
+    "Matching ChatGPT tab captions: $($matchedTabTitles -join ' | ')"
     "Window: $currentTitle"
     "Characters: $($Report.Length)"
 } finally {
