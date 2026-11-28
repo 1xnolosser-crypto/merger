@@ -196,8 +196,7 @@ try {
         foreach($button in $buttons) {
             try {
                 $bc=$button.Current
-                if(-not $bc.IsOffscreen -and ($bc.AutomationId -eq 'send-button' -or $bc.Name -match '(?i)^send prompt$|^send
-)) {
+                if(-not $bc.IsOffscreen -and ($bc.AutomationId -eq 'send-button' -or $bc.Name -match '(?i)^send(?: prompt)?$')) {
                     $sendButton=$button; break
                 }
             } catch {}
