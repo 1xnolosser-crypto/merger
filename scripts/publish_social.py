@@ -12,7 +12,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -181,9 +181,9 @@ def parse_publish_at(value: str) -> datetime:
     now = datetime.now(timezone.utc)
     if result <= now.replace(microsecond=0):
         raise PublishError("Publish time is in the past. No platform upload was started.")
-    if result < now + __import__("datetime").timedelta(minutes=10):
+    if result < now + timedelta(minutes=10):
         raise PublishError("Choose a publish time at least 10 minutes from now.")
-    if result > now + __import__("datetime").timedelta(days=75):
+    if result > now + timedelta(days=75):
         raise PublishError("Choose a publish time within the next 75 days.")
     return result
 
