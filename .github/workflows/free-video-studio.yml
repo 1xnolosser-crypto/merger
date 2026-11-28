@@ -26,7 +26,7 @@ jobs:
           python-version: "3.12"
 
       - name: Compile Python scripts
-        run: python -m py_compile scripts/free_video_studio.py scripts/topic_seo_planner.py tests/test_free_video_studio.py tests/test_topic_seo_planner.py
+        run: python -m py_compile scripts/free_video_studio.py scripts/topic_seo_planner.py scripts/publish_social.py tests/test_free_video_studio.py tests/test_topic_seo_planner.py
 
       - name: Validate sample video specification
         run: python -m json.tool examples/free-video-project.json > /dev/null
@@ -44,7 +44,8 @@ jobs:
         run: |
           $paths = @(
             (Join-Path $env:GITHUB_WORKSPACE "scripts/run-free-video.ps1"),
-            (Join-Path $env:GITHUB_WORKSPACE "scripts/run-free-video-worker.ps1")
+            (Join-Path $env:GITHUB_WORKSPACE "scripts/run-free-video-worker.ps1"),
+            (Join-Path $env:GITHUB_WORKSPACE "scripts/run-daily-vyrox.ps1")
           )
           foreach ($path in $paths) {
             if (-not (Test-Path -LiteralPath $path)) {
