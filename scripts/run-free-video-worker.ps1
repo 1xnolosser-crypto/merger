@@ -4,7 +4,7 @@ param(
   [string]$OutputDir = (Join-Path $PSScriptRoot "..\media-output"),
   [switch]$AutoTopic,
   [ValidateSet("any", "science", "technology")][string]$TopicCategory = "any",
-  [string]$TopicHistoryPath = (Join-Path $PSScriptRoot "..\\topic-history.txt"),
+  [string]$TopicHistoryPath = (Join-Path $PSScriptRoot "..\topic-history.txt"),
   [switch]$CreateMetricoolPackage
 )
 
