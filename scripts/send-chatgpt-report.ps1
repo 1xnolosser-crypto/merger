@@ -74,156 +74,6 @@ namespace BridgeNative {
 "@
 }
 
-
-function Get-ComposerText {
-    param([System.Windows.Automation.AutomationElement]$Composer)
-    if (-not $Composer) { return $null }
-    try {
-        $p = $Composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        return [string]$p.Current.Value
-    } catch {}
-    try {
-        $p = $Composer.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
-        return [string]$p.DocumentRange.GetText(2000000)
-    } catch {}
-    return $null
-}
-
-function Get-ChatGPTSendButton {
-    param([System.Windows.Automation.AutomationElement]$Root)
-    if (-not $Root) { return $null }
-    try {
-        $c = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::AutomationIdProperty, "send-button"
-        )
-        $b = $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
-        if ($b) { return $b }
-    } catch {}
-    try {
-        $c = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::Button
-        )
-        $buttons = @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c))
-        $matches = @($buttons | Where-Object {
-            try {
-                -not $_.Current.IsOffscreen -and
-                ([string]$_.Current.Name -match '(?i)send prompt|send message|^send$|إرسال')
-            } catch { $false }
-        })
-        if ($matches.Count -gt 0) { return $matches[$matches.Count - 1] }
-    } catch {}
-    return $null
-}
-
-function Get-ChatGPTPageText {
-    param([System.Windows.Automation.AutomationElement]$Root)
-    $parts = New-Object System.Collections.Generic.List[string]
-    try {
-        $c = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::Text
-        )
-        $items = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c)
-        foreach ($item in $items) {
-            try {
-                $n = [string]$item.Current.Name
-                if ($n) { $parts.Add($n) }
-            } catch {}
-        }
-    } catch {}
-    return ($parts -join [Environment]::NewLine)
-}
-
-function Wait-ForChatGPTComposerReady {
-    param(
-        [System.Windows.Automation.AutomationElement]$Root,
-        [string]$ExpectedText,
-        [int]$TimeoutSeconds
-    )
-    $expectedNormalized = [regex]::Replace($ExpectedText, '\s+', ' ').Trim()
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    $lastText = $null
-    $stableSince = $null
-    while ((Get-Date) -lt $deadline) {
-        $composer = Get-ChatGPTComposer -Root $Root
-        $current = Get-ComposerText -Composer $composer
-        $button = Get-ChatGPTSendButton -Root $Root
-        $enabled = $false
-        if ($button) { try { $enabled = [bool]$button.Current.IsEnabled } catch {} }
-
-        $currentNormalized = if ($null -ne $current) { [regex]::Replace([string]$current, '\s+', ' ').Trim() } else { '' }
-        $complete = ($currentNormalized -ceq $expectedNormalized)
-        if ($complete -and $enabled) {
-            if ($current -ceq $lastText) {
-                if (-not $stableSince) { $stableSince = Get-Date }
-                if (((Get-Date) - $stableSince).TotalMilliseconds -ge 1000) {
-                    return [pscustomobject]@{ Composer=$composer; Button=$button; Text=$current }
-                }
-            } else {
-                $lastText = $current
-                $stableSince = Get-Date
-            }
-        } else {
-            $lastText = $current
-            $stableSince = $null
-        }
-        Start-Sleep -Milliseconds 300
-    }
-    throw "CHATGPT_SEND_ABORTED: The full report did not stabilize in the composer with an enabled Send button within $TimeoutSeconds seconds. Nothing was submitted."
-}
-
-function Submit-ChatGPTMessage {
-    param(
-        [System.Windows.Automation.AutomationElement]$Root,
-        [string]$ExpectedText,
-        [int]$TimeoutSeconds
-    )
-    [void](Wait-ForChatGPTComposerReady -Root $Root -ExpectedText $ExpectedText -TimeoutSeconds $TimeoutSeconds)
-    $expectedNormalized = [regex]::Replace($ExpectedText, '\s+', ' ').Trim()
-
-    $button = Get-ChatGPTSendButton -Root $Root
-    if (-not $button -or -not $button.Current.IsEnabled) {
-        throw "CHATGPT_SEND_ABORTED: Send became disabled before submission. The report remains in the composer."
-    }
-
-    $invoked = $false
-    try {
-        $invoke = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-        $invoke.Invoke()
-        $invoked = $true
-    } catch {}
-    if (-not $invoked) {
-        if (-not $button.Current.IsEnabled) {
-            throw "CHATGPT_SEND_ABORTED: Send button is disabled and cannot be invoked."
-        }
-        $ws.SendKeys("{ENTER}")
-    }
-
-    $deadline = (Get-Date).AddSeconds([Math]::Max(10, $TimeoutSeconds))
-    $composerCleared = $false
-    $messageVisible = $false
-    while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Milliseconds 500
-        $composer = Get-ChatGPTComposer -Root $Root
-        $remaining = Get-ComposerText -Composer $composer
-        if ($null -ne $remaining -and [string]::IsNullOrWhiteSpace($remaining)) {
-            $composerCleared = $true
-        }
-        $pageText = Get-ChatGPTPageText -Root $Root
-        $pageNormalized = [regex]::Replace([string]$pageText, '\s+', ' ').Trim()
-        if ($pageNormalized.Contains($expectedNormalized)) {
-            $messageVisible = $true
-        }
-        if ($composerCleared -and $messageVisible) { return $true }
-    }
-
-    if ($composerCleared) {
-        throw "CHATGPT_SEND_UNCONFIRMED: The composer cleared after Send, but UI Automation could not verify the submitted report in the conversation. Do not retry automatically; this avoids duplicate messages."
-    }
-    throw "CHATGPT_SEND_ABORTED: The report is still in the composer after the Send attempt. Submission was not confirmed."
-}
-
 function Get-ChatGPTComposer {
     param([System.Windows.Automation.AutomationElement]$Root)
     if (-not $Root) { return $null }
@@ -273,17 +123,41 @@ function Get-EdgeAddressBarUrl {
             [System.Windows.Automation.AutomationElement]::AutomationIdProperty, "view_1017"
         )
         $element = $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
-    } try {
-    Set-Clipboard -Value $Report
-    $targetComposer.SetFocus()
-    Start-Sleep -Milliseconds 300
-    $ws.SendKeys("^v")
-    [void](Submit-ChatGPTMessage -Root $target -ExpectedText $Report -TimeoutSeconds $WaitSeconds)
+    } catch {}
+    if (-not $element) {
+        try {
+            $condition = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::NameProperty, "Address and search bar"
+            )
+            $element = $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        } catch {}
+    }
+    if ($element) {
+        try {
+            $pattern = $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            return ([string]$pattern.Current.Value).Trim()
+        } catch {}
+    }
+    return ""
+}
 
-    "CHATGPT_MESSAGE_SUBMITTED"
-    "Destination: verified ChatGPT tab in Microsoft Edge"
-    "Window: $currentTitle"
-    "Characters: $($Report.Length)"ondition(
+function Test-ChatGPTPage {
+    param([System.Windows.Automation.AutomationElement]$Root, [string]$WindowTitle)
+    $address = Get-EdgeAddressBarUrl -Root $Root
+    if ($address) {
+        $uri = $null
+        if ([Uri]::TryCreate($address, [UriKind]::Absolute, [ref]$uri)) {
+            return ($uri.Host -eq "chatgpt.com" -or $uri.Host.EndsWith(".chatgpt.com"))
+        }
+    }
+    # Title is a safe fallback only for the currently selected page.
+    return ($WindowTitle -match "(?i)chatgpt")
+}
+
+function Get-EdgeTabItems {
+    param([System.Windows.Automation.AutomationElement]$Root)
+    try {
+        $condition = New-Object System.Windows.Automation.PropertyCondition(
             [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
             [System.Windows.Automation.ControlType]::TabItem
         )
@@ -317,6 +191,164 @@ function Select-EdgeTab {
             return $true
         } catch { return $false }
     }
+}
+
+
+function Get-ComposerText {
+    param([System.Windows.Automation.AutomationElement]$Composer)
+    if (-not $Composer) { return $null }
+    try {
+        $pattern = $Composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        return [string]$pattern.Current.Value
+    } catch {}
+    try {
+        $pattern = $Composer.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+        return [string]$pattern.DocumentRange.GetText(2000000)
+    } catch {}
+    return $null
+}
+
+function Get-ChatGPTSendButton {
+    param([System.Windows.Automation.AutomationElement]$Root)
+    if (-not $Root) { return $null }
+    try {
+        $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::AutomationIdProperty, "send-button"
+        )
+        $button = $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        if ($button) { return $button }
+    } catch {}
+    try {
+        $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Button
+        )
+        $buttons = @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition))
+        $matches = @($buttons | Where-Object {
+            try {
+                -not $_.Current.IsOffscreen -and
+                ([string]$_.Current.Name -match '(?i)send prompt|send message|^send$|إرسال')
+            } catch { $false }
+        })
+        if ($matches.Count -gt 0) { return $matches[$matches.Count - 1] }
+    } catch {}
+    return $null
+}
+
+function Get-ChatGPTPageText {
+    param([System.Windows.Automation.AutomationElement]$Root)
+    $parts = New-Object System.Collections.Generic.List[string]
+    try {
+        $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Text
+        )
+        $items = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        foreach ($item in $items) {
+            try {
+                $name = [string]$item.Current.Name
+                if ($name) { $parts.Add($name) }
+            } catch {}
+        }
+    } catch {}
+    return ($parts -join [Environment]::NewLine)
+}
+
+function Wait-ForChatGPTComposerReady {
+    param(
+        [System.Windows.Automation.AutomationElement]$Root,
+        [string]$ExpectedText,
+        [int]$TimeoutSeconds
+    )
+    $expectedNormalized = [regex]::Replace($ExpectedText, '\s+', ' ').Trim()
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastText = $null
+    $stableSince = $null
+    while ((Get-Date) -lt $deadline) {
+        $composer = Get-ChatGPTComposer -Root $Root
+        $current = Get-ComposerText -Composer $composer
+        $button = Get-ChatGPTSendButton -Root $Root
+        $enabled = $false
+        if ($button) {
+            try { $enabled = [bool]$button.Current.IsEnabled } catch {}
+        }
+        $currentNormalized = ''
+        if ($null -ne $current) {
+            $currentNormalized = [regex]::Replace([string]$current, '\s+', ' ').Trim()
+        }
+        if (($currentNormalized -ceq $expectedNormalized) -and $enabled) {
+            if ($current -ceq $lastText) {
+                if (-not $stableSince) { $stableSince = Get-Date }
+                if (((Get-Date) - $stableSince).TotalMilliseconds -ge 1000) {
+                    return [pscustomobject]@{ Composer = $composer; Button = $button; Text = $current }
+                }
+            } else {
+                $lastText = $current
+                $stableSince = Get-Date
+            }
+        } else {
+            $lastText = $current
+            $stableSince = $null
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    throw "CHATGPT_SEND_ABORTED: The complete report did not stabilize in the composer with an enabled Send button within $TimeoutSeconds seconds. Nothing was submitted."
+}
+
+function Submit-ChatGPTMessage {
+    param(
+        [System.Windows.Automation.AutomationElement]$Root,
+        [string]$ExpectedText,
+        [object]$WScriptShell,
+        [int]$TimeoutSeconds
+    )
+    [void](Wait-ForChatGPTComposerReady -Root $Root -ExpectedText $ExpectedText -TimeoutSeconds $TimeoutSeconds)
+    $expectedNormalized = [regex]::Replace($ExpectedText, '\s+', ' ').Trim()
+    $button = Get-ChatGPTSendButton -Root $Root
+    if (-not $button) {
+        throw "CHATGPT_SEND_ABORTED: The Send button could not be located. The report remains in the composer."
+    }
+    if (-not $button.Current.IsEnabled) {
+        throw "CHATGPT_SEND_ABORTED: The Send button became disabled before submission. The report remains in the composer."
+    }
+
+    $invoked = $false
+    try {
+        $invokePattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+        $invokePattern.Invoke()
+        $invoked = $true
+    } catch {}
+    if (-not $invoked) {
+        if (-not $button.Current.IsEnabled) {
+            throw "CHATGPT_SEND_ABORTED: The Send button is disabled and cannot be invoked."
+        }
+        $WScriptShell.SendKeys("{ENTER}")
+    }
+
+    $deadline = (Get-Date).AddSeconds([Math]::Max(10, $TimeoutSeconds))
+    $composerCleared = $false
+    $messageVisible = $false
+    $head = $expectedNormalized.Substring(0, [Math]::Min(80, $expectedNormalized.Length))
+    $tailStart = [Math]::Max(0, $expectedNormalized.Length - 80)
+    $tail = $expectedNormalized.Substring($tailStart)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        $composer = Get-ChatGPTComposer -Root $Root
+        $remaining = Get-ComposerText -Composer $composer
+        if ($null -ne $remaining -and [string]::IsNullOrWhiteSpace($remaining)) {
+            $composerCleared = $true
+        }
+        $pageText = Get-ChatGPTPageText -Root $Root
+        $pageNormalized = [regex]::Replace([string]$pageText, '\s+', ' ').Trim()
+        if ($pageNormalized.Contains($head) -and $pageNormalized.Contains($tail)) {
+            $messageVisible = $true
+        }
+        if ($composerCleared -and $messageVisible) { return $true }
+    }
+    if ($composerCleared) {
+        throw "CHATGPT_SEND_UNCONFIRMED: The composer cleared after Send, but the submitted report could not be verified in the conversation. Do not retry automatically; this prevents duplicate messages."
+    }
+    throw "CHATGPT_SEND_ABORTED: The report remains in the composer after the Send attempt. Submission was not confirmed."
 }
 
 $windows = @([BridgeNative.WindowApi]::GetEdgeWindows())
@@ -415,31 +447,8 @@ try {
     $targetComposer.SetFocus()
     Start-Sleep -Milliseconds 350
     $ws.SendKeys("^v")
-    Start-Sleep -Milliseconds 900
 
-    $pastedValue = $null
-    try {
-        $valuePattern = $targetComposer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        $pastedValue = [string]$valuePattern.Current.Value
-    } catch {}
-
-    if ($null -ne $pastedValue -and
-        -not $pastedValue.Contains($Report.Substring(0, [Math]::Min(40, $Report.Length)))) {
-        throw "CHATGPT_SEND_ABORTED: Composer verification failed. Enter was not pressed."
-    }
-
-    $ws.SendKeys("{ENTER}")
-    Start-Sleep -Seconds 3
-
-    $remainingValue = $null
-    try {
-        $valuePattern = $targetComposer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        $remainingValue = [string]$valuePattern.Current.Value
-    } catch {}
-
-    if ($null -ne $remainingValue -and $remainingValue.Contains($Report.Substring(0, [Math]::Min(40, $Report.Length)))) {
-        throw "CHATGPT_SEND_ABORTED: The report remains in the composer; submission was not confirmed."
-    }
+    [void](Submit-ChatGPTMessage -Root $target -ExpectedText $Report -WScriptShell $ws -TimeoutSeconds $WaitSeconds)
 
     "CHATGPT_MESSAGE_SUBMITTED"
     "Destination: verified ChatGPT tab in Microsoft Edge"
