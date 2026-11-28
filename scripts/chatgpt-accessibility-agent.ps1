@@ -68,8 +68,8 @@ function Find-Composer($root) {
 }
 
 function Get-ChatGPTTabItems($root) {
-    $matches = @()
-    if (-not $root) { return ,$matches }
+    $chatTabsFound = @()
+    if (-not $root) { return $chatTabsFound }
     try {
         $condition = New-Object System.Windows.Automation.PropertyCondition(
             [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -79,11 +79,11 @@ function Get-ChatGPTTabItems($root) {
         foreach ($item in $items) {
             try {
                 $name = [string]$item.Current.Name
-                if ($name -match '(?i)chatgpt') { $matches += $item }
+                if ($name -match '(?i)chatgpt') { $chatTabsFound += $item }
             } catch {}
         }
     } catch {}
-    return ,$matches
+    return $chatTabsFound
 }
 function Select-ChatGPTTab($tab,$window) {
     $selected = $false
