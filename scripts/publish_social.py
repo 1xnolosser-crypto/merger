@@ -318,6 +318,29 @@ def publish_facebook(package: dict[str, Any], video_path: Path, page_id: str, pu
     return f"https://www.facebook.com/reel/{video_id}"
 
 
+def ensure_youtube_authorized() -> None:
+    """Ensure the saved desktop OAuth grant includes the scopes required to upload and verify."""
+    if not YOUTUBE_TOKEN.is_file():
+        authorize_youtube()
+    else:
+        try:
+            saved = json.loads(YOUTUBE_TOKEN.read_text(encoding="utf-8-sig"))
+            granted = set(saved.get("scopes") or saved.get("granted_scopes") or [])
+        except Exception:
+            granted = set()
+        if not set(YOUTUBE_SCOPES).issubset(granted):
+            print("YOUTUBE_REAUTH_REQUIRED: requesting upload and read-only scopes.")
+            authorize_youtube()
+    try:
+        saved = json.loads(YOUTUBE_TOKEN.read_text(encoding="utf-8-sig"))
+        granted = set(saved.get("scopes") or saved.get("granted_scopes") or [])
+    except Exception:
+        granted = set()
+    if not set(YOUTUBE_SCOPES).issubset(granted):
+        raise PublishError("OAuth consent did not grant both youtube.upload and youtube.readonly. No new upload was started.")
+    print("YOUTUBE_REQUIRED_SCOPES_CONFIRMED")
+
+
 def reconcile_youtube_upload(package_path: Path, video_id: str, publish_at_text: str) -> str:
     """Verify an already-uploaded YouTube video without uploading it again."""
     publish_at = parse_publish_at(publish_at_text)
@@ -435,6 +458,7 @@ def main() -> int:
     reconcile.add_argument("--package", required=True)
     reconcile.add_argument("--video-id", required=True)
     reconcile.add_argument("--publish-at", required=True)
+    sub.add_parser("ensure-youtube-auth", help="Request missing YouTube OAuth scopes without uploading.")
     pub = sub.add_parser("publish", help="Upload and schedule a prepared local package.")
     pub.add_argument("--package", required=True)
     pub.add_argument("--page-id", default="1574613545729181")
@@ -450,6 +474,8 @@ def main() -> int:
             check_credentials(args.page_id)
         elif args.command == "reconcile-youtube":
             reconcile_youtube_upload(Path(args.package).expanduser().resolve(), args.video_id, args.publish_at)
+        elif args.command == "ensure-youtube-auth":
+            ensure_youtube_authorized()
         else:
             publish_at = parse_publish_at(args.publish_at)
             package_path = Path(args.package).expanduser().resolve()
@@ -496,15 +522,19 @@ def main() -> int:
                 }
                 write_state(state_file, state)
                 print(platform.upper() + "_SCHEDULED: " + url)
-            complete = all(
+            requested_complete = all(
                 state["platforms"].get(p, {}).get("scheduled") or state["platforms"].get(p, {}).get("success")
                 for p in requested
             )
-            state["status"] = "scheduled" if complete else "partial"
+            all_platforms_complete = all(
+                state["platforms"].get(p, {}).get("scheduled") or state["platforms"].get(p, {}).get("success")
+                for p in ("youtube", "facebook")
+            )
+            state["status"] = "scheduled" if all_platforms_complete else "partial"
             state["scheduledAt"] = publish_at.isoformat()
             state["updatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             write_state(state_file, state)
-            if not complete:
+            if not requested_complete:
                 error_summary = "; ".join(
                     platform.upper() + ": " + message for platform, message in platform_errors.items()
                 )
